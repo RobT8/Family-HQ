@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>Family HQ</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root {
+    --bg: #F0F4FF; --card: #FFFFFF; --primary: #4F5BD5; --primaryLight: #E8EAFF;
+    --accent: #F5A623; --accentLight: #FFF7E6; --success: #22C55E; --successLight: #ECFDF5;
+    --danger: #EF4444; --text: #1A1A2E; --textMuted: #6B7280; --border: #E5E7EB; --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  #app { max-width: 480px; margin: 0 auto; min-height: 100vh; position: relative; }
+  button { font-family: inherit; cursor: pointer; }
+  input { font-family: inherit; }
+  .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: #fff;
+    padding: 10px 22px; border-radius: 30px; font-size: 14px; font-weight: 600; z-index: 999; white-space: nowrap; box-shadow: 0 4px 20px rgba(0,0,0,.2); }
+  .login-wrap { display: flex; flex-direction: column; align-items: center; padding: 48px 24px 24px; min-height: 100vh; }
+  .logo-area { text-align: center; margin-bottom: 36px; }
+  .logo-title { font-size: 28px; font-weight: 800; margin: 8px 0 4px; letter-spacing: -0.5px; }
+  .logo-sub { font-size: 15px; color: var(--textMuted); margin: 0; }
+  .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; width: 100%; max-width: 320px; }
+  .profile-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 12px;
+    background: var(--card); border: 2px solid var(--border); border-radius: var(--radius); }
+  .profile-name { font-size: 16px; font-weight: 700; }
+  .profile-role { font-size: 13px; color: var(--textMuted); }
+  .pin-row { display: flex; gap: 10px; margin-top: 20px; }
+  .pin-input { width: 140px; padding: 12px 16px; font-size: 22px; text-align: center; border: 2px solid var(--border);
+    border-radius: var(--radius); outline: none; letter-spacing: 6px; font-weight: 700; }
+  .pin-go { padding: 12px 24px; background: var(--primary); color: #fff; border: none; border-radius: var(--radius); font-size: 16px; font-weight: 700; }
+  .back-link { margin-top: 18px; background: none; border: none; color: var(--primary); font-size: 14px; font-weight: 600; }
+  .pin-hint { margin-top: 24px; font-size: 12px; color: var(--textMuted); background: var(--accentLight); padding: 8px 14px; border-radius: 8px; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; background: var(--card); border-bottom: 1px solid var(--border); }
+  .header-left { display: flex; align-items: center; gap: 10px; }
+  .header-name { font-size: 17px; font-weight: 700; }
+  .header-pts { font-size: 13px; font-weight: 700; color: var(--accent); background: var(--accentLight); padding: 3px 10px; border-radius: 20px; }
+  .logout-btn { padding: 6px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--textMuted); }
+  .tab-bar { display: flex; overflow-x: auto; background: var(--card); border-bottom: 1px solid var(--border); padding: 0 8px; }
+  .tab-bar::-webkit-scrollbar { display: none; }
+  .tab-btn { padding: 12px 10px; background: none; border: none; border-bottom: 3px solid transparent; font-size: 13px; font-weight: 600; color: var(--textMuted); white-space: nowrap; flex-shrink: 0; }
+  .tab-btn.active { border-bottom: 3px solid var(--primary); color: var(--primary); font-weight: 700; }
+  .content { padding: 20px 16px 40px; }
+  .section-head { font-size: 16px; font-weight: 700; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--card); border-radius: var(--radius); margin-bottom: 8px; border: 1px solid var(--border); }
+  .row-emoji { font-size: 22px; width: 32px; text-align: center; }
+  .row-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .row-title { font-size: 14px; font-weight: 600; }
+  .row-meta { font-size: 12px; color: var(--textMuted); }
+  .btn-sm { padding: 6px 14px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .btn-add { padding: 6px 16px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; }
+  .btn-dashed { width: 100%; padding: 14px; background: var(--primaryLight); color: var(--primary); border: 2px dashed var(--primary); border-radius: var(--radius); font-size: 14px; font-weight: 700; margin-top: 10px; }
+  .empty-msg { font-size: 14px; color: var(--textMuted); text-align: center; padding: 40px; }
+  .missed-note { font-size: 13px; background: var(--accentLight); color: #92400E; padding: 10px 14px; border-radius: 10px; margin-bottom: 16px; line-height: 1.5; }
+  .mgmt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .reward-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .reward-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 10px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); }
+  .reward-title { font-size: 13px; font-weight: 600; text-align: center; line-height: 1.3; }
+  .reward-cost { font-size: 12px; color: var(--accent); font-weight: 700; }
+  .claim-btn { margin-top: 4px; padding: 6px 16px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; }
+  .claim-btn-off { margin-top: 4px; padding: 6px 12px; background: var(--border); color: var(--textMuted); border: none; border-radius: 8px; font-size: 11px; font-weight: 600; }
+  .score-row { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--card); border-radius: var(--radius); margin-bottom: 8px; border: 1px solid var(--border); }
+  .score-name { flex: 1; font-size: 16px; font-weight: 700; }
+  .approval-row { display: flex; justify-content: space-between; align-items: center; padding: 14px; background: var(--card); border-radius: var(--radius); margin-bottom: 8px; border: 1px solid var(--border); }
+  .approve-btn, .reject-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); font-size: 18px; }
+  .approve-btn { background: var(--successLight); }
+  .reject-btn { background: #FEF2F2; }
+  .shopping-check { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--border); background: transparent; font-size: 13px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--success); }
+  .shopping-remove { width: 26px; height: 26px; border-radius: 8px; border: none; background: transparent; font-size: 13px; color: var(--textMuted); }
+  .overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; justify-content: center; z-index: 100; }
+  .modal { background: var(--card); border-radius: 18px 18px 0 0; padding: 24px 20px 32px; width: 100%; max-width: 480px; max-height: 85vh; overflow-y: auto; }
+  .modal-title { font-size: 18px; font-weight: 700; margin: 0 0 12px; }
+  .label { font-size: 13px; font-weight: 600; color: var(--textMuted); display: block; margin-bottom: 6px; margin-top: 14px; }
+  .input { width: 100%; padding: 10px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; outline: none; box-sizing: border-box; }
+  .emoji-row, .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .emoji-btn { width: 36px; height: 36px; border-radius: 8px; border: 1.5px solid var(--border); background: var(--bg); font-size: 18px; display: flex; align-items: center; justify-content: center; }
+  .emoji-btn.active { border: 2px solid var(--primary); background: var(--primaryLight); }
+  .chip { padding: 8px 14px; border-radius: 8px; border: 1.5px solid var(--border); background: var(--bg); font-size: 13px; font-weight: 600; }
+  .chip.active { border: 2px solid var(--primary); background: var(--primaryLight); color: var(--primary); font-weight: 700; }
+  .modal-btns { display: flex; gap: 10px; margin-top: 22px; align-items: center; }
+  .cancel-btn { padding: 12px 20px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; font-size: 14px; font-weight: 600; }
+  .save-btn { padding: 12px 24px; background: var(--primary); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; }
+  .delete-btn { padding: 10px 14px; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; font-size: 13px; font-weight: 600; color: #DC2626; }
+  .deduct-btn { margin-left: 8px; padding: 3px 10px; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 6px; font-size: 11px; font-weight: 600; color: #DC2626; }
+  .sync-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--success); display: inline-block; margin-right: 6px; }
+  .profile-stat { display: flex; flex-direction: column; align-items: center; padding: 12px 16px; background: var(--card); border-radius: 12px; border: 1px solid var(--border); min-width: 80px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const SUPABASE_URL = "https://zpesevmnmaifnooqiyrr.supabase.co";
+const SUPABASE_KEY = "sb_publishable_5WdjrD77OFZANghegb_4-w_fR4d582z";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ---------- state ----------
+let state = {
+  members: [], chores: [], choreLog: [], rewards: [], rewardClaims: [], shopping: [],
+  currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
+  modal: null, editTarget: null, toast: null, loaded: false,
+  forms: {
+    chore: { title: "", points: 5, emoji: "⭐", assignedTo: [], recurring: "daily", dayOfWeek: "Sun", startDate: todayKey() },
+    reward: { title: "", cost: 30, emoji: "🎁" },
+    deduct: { childId: null, amount: 5, reason: "" },
+    profile: { name: "", emoji: "🙂", pin: "", role: "child" },
+    shoppingInput: ""
+  }
+};
+const CHORE_EMOJIS = ["⭐","🛏️","🍽️","🧹","♻️","🐱","🍴","🧺","🚿","📚","🌿","🗑️","🐕","🧽"];
+const REWARD_EMOJIS = ["🎁","📱","🎬","🌙","🍬","🏠","💷","🎮","🍕","🎪","🛍️","🧸","🎂","⛱️"];
+const PROFILE_EMOJIS = ["👨","👩","🧒","👦","👧","👶","🧑","👱","👸","🤴","🦸","🧑‍🎓","🧑‍💻","🐶","🐱"];
+const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+function todayKey() { return new Date().toISOString().slice(0,10); }
+function yesterdayKey() { const d = new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
+function weekKey(dateObj) {
+  const d = new Date(dateObj); const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff); return d.toISOString().slice(0,10);
+}
+function isFortnightActive(chore, refDate = new Date()) {
+  if (!chore.start_date) return true;
+  const startMonday = weekKey(new Date(chore.start_date + "T00:00:00"));
+  const curMonday = weekKey(refDate);
+  const diffWeeks = Math.round((new Date(curMonday) - new Date(startMonday)) / (7*86400000));
+  if (diffWeeks < 0) return false;
+  return diffWeeks % 2 === 0;
+}
+function isChoreDue(chore) { return chore.recurring !== "fortnightly" || isFortnightActive(chore); }
+function periodFor(chore) {
+  if (chore.recurring === "weekly") return weekKey(new Date());
+  if (chore.recurring === "fortnightly") return isFortnightActive(chore) ? weekKey(new Date()) : null;
+  return todayKey();
+}
+function choreStatus(choreId, userId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return "todo";
+  const pending = state.choreLog.find(l => l.chore_id === choreId && l.user_id === userId && l.status === "pending");
+  if (pending) return "pending";
+  const period = periodFor(chore);
+  const entry = state.choreLog.find(l => l.chore_id === choreId && l.user_id === userId && l.period === period);
+  return entry ? entry.status : "todo";
+}
+function pendingSpendFor(userId) {
+  return state.rewardClaims.filter(rc => rc.user_id === userId && rc.status === "pending")
+    .reduce((sum, rc) => sum + (state.rewards.find(r => r.id === rc.reward_id)?.cost || 0), 0);
+}
+function availableBalance(userId) {
+  const m = state.members.find(m => m.id === userId);
+  return (m?.balance || 0) - pendingSpendFor(userId);
+}
+
+// ---------- data layer ----------
+async function fetchAll() {
+  const [members, chores, choreLog, rewards, rewardClaims, shopping] = await Promise.all([
+    sb.from("familyhq_members").select("*").order("id"),
+    sb.from("familyhq_chores").select("*").order("id"),
+    sb.from("familyhq_chore_log").select("*"),
+    sb.from("familyhq_rewards").select("*").order("id"),
+    sb.from("familyhq_reward_claims").select("*"),
+    sb.from("familyhq_shopping_list").select("*").order("created_at")
+  ]);
+  state.members = members.data || [];
+  state.chores = chores.data || [];
+  state.choreLog = choreLog.data || [];
+  state.rewards = rewards.data || [];
+  state.rewardClaims = rewardClaims.data || [];
+  state.shopping = shopping.data || [];
+  state.loaded = true;
+  // keep currentUser in sync with fresh data
+  if (state.currentUser) {
+    const fresh = state.members.find(m => m.id === state.currentUser.id);
+    if (fresh) state.currentUser = fresh;
+  }
+  render();
+}
+
+function subscribeRealtime() {
+  sb.channel("familyhq-all")
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_members" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_chores" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_chore_log" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_rewards" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_reward_claims" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_shopping_list" }, fetchAll)
+    .subscribe();
+}
+
+function showToast(msg) { state.toast = msg; render(); setTimeout(() => { state.toast = null; renderToastOnly(); }, 2200); }
+function renderToastOnly() { const t = document.getElementById("toast-holder"); if (t) t.innerHTML = state.toast ? `<div class="toast">${state.toast}</div>` : ""; }
+
+// ---------- actions ----------
+async function markDone(choreId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  const period = periodFor(chore);
+  await sb.from("familyhq_chore_log").insert({ id: Date.now(), chore_id: choreId, user_id: state.currentUser.id, period, status: "pending" });
+  showToast("Nice one! Waiting for approval ✋");
+}
+async function approveChore(entry) {
+  const chore = state.chores.find(c => c.id === entry.chore_id);
+  await sb.from("familyhq_chore_log").update({ status: "approved" }).eq("id", entry.id);
+  if (chore) {
+    const m = state.members.find(m => m.id === entry.user_id);
+    await sb.from("familyhq_members").update({ balance: (m.balance||0) + chore.points, total_earned: (m.total_earned||0) + chore.points }).eq("id", entry.user_id);
+  }
+  showToast(`Approved — +${chore?.points||0} pts ⭐`);
+}
+async function rejectChore(entry) {
+  await sb.from("familyhq_chore_log").update({ status: "rejected" }).eq("id", entry.id);
+  showToast("Sent back");
+}
+async function claimReward(reward) {
+  const avail = availableBalance(state.currentUser.id);
+  if (avail >= reward.cost) {
+    await sb.from("familyhq_reward_claims").insert({ id: Date.now(), reward_id: reward.id, user_id: state.currentUser.id, status: "pending" });
+    showToast(`Claim sent — waiting for a parent ✋`);
+  } else showToast(`Need ${reward.cost - avail} more points`);
+}
+async function approveRewardClaim(claim) {
+  const reward = state.rewards.find(r => r.id === claim.reward_id);
+  const m = state.members.find(m => m.id === claim.user_id);
+  await sb.from("familyhq_members").update({ balance: (m.balance||0) - reward.cost }).eq("id", claim.user_id);
+  await sb.from("familyhq_reward_claims").update({ status: "approved" }).eq("id", claim.id);
+  showToast(`✅ Confirmed`);
+}
+async function rejectRewardClaim(claim) {
+  await sb.from("familyhq_reward_claims").update({ status: "rejected" }).eq("id", claim.id);
+  showToast("Claim declined — points held back");
+}
+async function confirmDeduct() {
+  const f = state.forms.deduct;
+  if (!f.reason.trim()) { showToast("Add a reason first"); return; }
+  const m = state.members.find(m => m.id === f.childId);
+  const newBal = Math.max(0, (m.balance||0) - f.amount);
+  await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
+  showToast(`${f.amount} pts deducted`);
+  state.modal = null; render();
+}
+async function saveChoreForm() {
+  const f = state.forms.chore;
+  if (!f.title.trim() || f.assignedTo.length === 0) return;
+  const payload = { title: f.title, points: f.points, emoji: f.emoji, assigned_to: f.assignedTo, recurring: f.recurring,
+    day_of_week: f.recurring === "fortnightly" ? f.dayOfWeek : null, start_date: f.recurring === "fortnightly" ? f.startDate : null };
+  if (state.modal === "addChore") { await sb.from("familyhq_chores").insert({ id: Date.now(), ...payload }); showToast("Job added ✅"); }
+  else { await sb.from("familyhq_chores").update(payload).eq("id", state.editTarget.id); showToast("Job updated ✅"); }
+  state.modal = null; state.editTarget = null; render();
+}
+async function deleteChoreForm(id) { await sb.from("familyhq_chores").delete().eq("id", id); showToast("Job removed"); state.modal = null; render(); }
+async function saveRewardForm() {
+  const f = state.forms.reward;
+  if (!f.title.trim()) return;
+  if (state.modal === "addReward") { await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost: f.cost, emoji: f.emoji }); showToast("Reward added 🎁"); }
+  else { await sb.from("familyhq_rewards").update({ title: f.title, cost: f.cost, emoji: f.emoji }).eq("id", state.editTarget.id); showToast("Reward updated 🎁"); }
+  state.modal = null; state.editTarget = null; render();
+}
+async function deleteRewardForm(id) { await sb.from("familyhq_rewards").delete().eq("id", id); showToast("Reward removed"); state.modal = null; render(); }
+async function saveMemberForm() {
+  const f = state.forms.profile;
+  if (!f.name.trim()) return;
+  if (state.modal === "addMember") {
+    const newId = Date.now();
+    await sb.from("familyhq_members").insert({ id: newId, name: f.name, emoji: f.emoji, pin: f.pin || "0000", role: f.role, balance: 0, total_earned: 0 });
+    showToast(`${f.name} added to the family! 🎉`);
+  } else {
+    const payload = { name: f.name, emoji: f.emoji };
+    if (state.currentUser.role === "parent") { payload.pin = f.pin; payload.role = f.role; }
+    await sb.from("familyhq_members").update(payload).eq("id", state.editTarget.id);
+    showToast("Profile updated ✅");
+  }
+  state.modal = null; state.editTarget = null; render();
+}
+async function deleteMemberForm(id) {
+  if (state.members.filter(m => m.role === "parent").length <= 1 && state.members.find(m => m.id === id)?.role === "parent") {
+    showToast("Can't remove the last parent"); return;
+  }
+  await sb.from("familyhq_members").delete().eq("id", id);
+  showToast("Member removed"); state.modal = null; render();
+}
+async function addShoppingItem() {
+  const text = state.forms.shoppingInput.trim();
+  if (!text) return;
+  await sb.from("familyhq_shopping_list").insert({ id: Date.now(), text, added_by: state.currentUser.id, done: false });
+  state.forms.shoppingInput = ""; render();
+}
+async function toggleShoppingItem(item) { await sb.from("familyhq_shopping_list").update({ done: !item.done }).eq("id", item.id); }
+async function removeShoppingItem(id) { await sb.from("familyhq_shopping_list").delete().eq("id", id); }
+async function clearCheckedShopping() {
+  const ids = state.shopping.filter(i => i.done).map(i => i.id);
+  if (ids.length) await sb.from("familyhq_shopping_list").delete().in("id", ids);
+  showToast("Cleared checked items");
+}
+
+function handleProfileTap(member) { state.pinTarget = member; state.pinInput = ""; render(); }
+function handlePinSubmit() {
+  const pt = state.pinTarget;
+  if (!pt) return;
+  const correctPin = state.pinInput === pt.pin;
+  const adminOverride = pt.role === "child" && state.members.some(m => m.role === "parent" && m.pin === state.pinInput);
+  if (correctPin || adminOverride) {
+    state.currentUser = pt; state.pinTarget = null; state.pinInput = ""; state.screen = "home"; state.tab = "myjobs";
+    render();
+    if (adminOverride && !correctPin) showToast("Opened with admin access 🔓");
+  } else showToast("Wrong PIN — try again");
+}
+function handleLogout() { state.currentUser = null; state.screen = "login"; state.pinTarget = null; state.pinInput = ""; state.tab = "myjobs"; render(); }
+
+function openAddChore() { state.forms.chore = { title:"", points:5, emoji:"⭐", assignedTo:[], recurring:"daily", dayOfWeek:"Sun", startDate: todayKey() }; state.modal = "addChore"; render(); }
+function openEditChore(ch) { state.editTarget = ch; state.forms.chore = { title: ch.title, points: ch.points, emoji: ch.emoji, assignedTo: [...ch.assigned_to], recurring: ch.recurring, dayOfWeek: ch.day_of_week || "Sun", startDate: ch.start_date || todayKey() }; state.modal = "editChore"; render(); }
+function openAddReward() { state.forms.reward = { title:"", cost:30, emoji:"🎁" }; state.modal = "addReward"; render(); }
+function openEditReward(r) { state.editTarget = r; state.forms.reward = { title: r.title, cost: r.cost, emoji: r.emoji }; state.modal = "editReward"; render(); }
+function openDeduct(childId) { state.forms.deduct = { childId, amount: 5, reason: "" }; state.modal = "deduct"; render(); }
+function openAddMember() { state.forms.profile = { name:"", emoji:"🧒", pin:"0000", role:"child" }; state.modal = "addMember"; render(); }
+function openEditProfile(m) { state.editTarget = m; state.forms.profile = { name: m.name, emoji: m.emoji, pin: m.pin, role: m.role }; state.modal = "editProfile"; render(); }
+function closeModal() { state.modal = null; state.editTarget = null; render(); }
+
+// ---------- render ----------
+function esc(s) { return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+function render() {
+  const app = document.getElementById("app");
+  if (!state.loaded) { app.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:var(--textMuted);">Loading Family HQ…</div>`; return; }
+  let html = `<div id="toast-holder">${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}</div>`;
+
+  if (state.screen === "login" && !state.pinTarget) {
+    html += `
+      <div class="login-wrap">
+        <div class="logo-area">
+          <span style="font-size:40px;">🏠</span>
+          <h1 class="logo-title">Family HQ</h1>
+          <p class="logo-sub"><span class="sync-dot"></span>Live &amp; synced — tap your name</p>
+        </div>
+        <div class="profile-grid">
+          ${state.members.map(m => `
+            <button class="profile-card" onclick="handleProfileTap(${m.id})">
+              <span style="font-size:36px;">${m.emoji}</span>
+              <span class="profile-name">${esc(m.name)}</span>
+              <span class="profile-role">${m.role === "parent" ? "Parent" : `⭐ ${m.balance} pts`}</span>
+            </button>`).join("")}
+        </div>
+      </div>`;
+  } else if (state.screen === "login" && state.pinTarget) {
+    html += `
+      <div class="login-wrap">
+        <div class="logo-area">
+          <span style="font-size:48px;">${state.pinTarget.emoji}</span>
+          <h2 style="font-size:22px;font-weight:700;margin:8px 0 0;">Hi ${esc(state.pinTarget.name)}</h2>
+          <p class="logo-sub">Enter your PIN</p>
+        </div>
+        <div class="pin-row">
+          <input class="pin-input" type="password" maxlength="4" id="pin-field" value="${state.pinInput}" placeholder="••••" autofocus>
+          <button class="pin-go" onclick="handlePinSubmit()">Go</button>
+        </div>
+        <button class="back-link" onclick="state.pinTarget=null;render()">← Back</button>
+      </div>`;
+  } else if (state.screen === "home" && state.currentUser) {
+    html += renderHome();
+  }
+
+  app.innerHTML = html;
+
+  // rewire input listeners after innerHTML replace
+  const pinField = document.getElementById("pin-field");
+  if (pinField) {
+    pinField.oninput = (e) => { state.pinInput = e.target.value.replace(/\D/g,""); };
+    pinField.onkeydown = (e) => { if (e.key === "Enter") handlePinSubmit(); };
+    pinField.focus();
+  }
+  const shopField = document.getElementById("shop-field");
+  if (shopField) {
+    shopField.oninput = (e) => { state.forms.shoppingInput = e.target.value; };
+    shopField.onkeydown = (e) => { if (e.key === "Enter") addShoppingItem(); };
+  }
+  wireModalInputs();
+}
+
+function renderHome() {
+  const cu = state.currentUser;
+  const isParent = cu.role === "parent";
+  const kids = state.members.filter(m => m.role === "child");
+  const parents = state.members.filter(m => m.role === "parent");
+  const pendingApprovals = state.choreLog.filter(l => l.status === "pending");
+  const pendingClaims = state.rewardClaims.filter(rc => rc.status === "pending");
+  const approveCount = pendingApprovals.length + pendingClaims.length;
+
+  const tabs = isParent ? [
+    ["myjobs","Overview"], ["chores","Jobs"], ["shopping","Shopping"],
+    ["approve", approveCount ? `Approve (${approveCount})` : "Approve"],
+    ["rewards","Rewards"], ["scores","Scores"], ["settings","⚙️"]
+  ] : [
+    ["myjobs","My Jobs"], ["shopping","Shopping"], ["rewards","Rewards"], ["scores","Scores"], ["profile","My Profile"]
+  ];
+
+  let out = `
+    <div class="header">
+      <div class="header-left">
+        <span style="font-size:22px;">${cu.emoji}</span>
+        <span class="header-name">${esc(cu.name)}</span>
+        ${!isParent ? `<span class="header-pts">⭐ ${cu.balance}</span>` : ""}
+      </div>
+      <button class="logout-btn" onclick="handleLogout()">Switch</button>
+    </div>
+    <div class="tab-bar">
+      ${tabs.map(([k,l]) => `<button class="tab-btn ${state.tab===k?'active':''}" onclick="state.tab='${k}';render()">${l}</button>`).join("")}
+    </div>`;
+
+  if (state.tab === "myjobs") out += isParent ? renderOverview(kids) : renderMyJobs(cu);
+  else if (state.tab === "chores" && isParent) out += renderChoresTab(cu);
+  else if (state.tab === "shopping") out += renderShopping();
+  else if (state.tab === "approve" && isParent) out += renderApprove(pendingApprovals, pendingClaims);
+  else if (state.tab === "rewards") out += renderRewards(isParent, cu);
+  else if (state.tab === "scores") out += renderScores(kids);
+  else if (state.tab === "settings" && isParent) out += renderSettings(kids);
+  else if (state.tab === "profile" && !isParent) out += renderProfile(cu);
+
+  if (state.modal) out += renderModal();
+  return out;
+}
+
+function renderOverview(kids) {
+  const missed = (() => {
+    const yKey = yesterdayKey();
+    const daily = state.chores.filter(c => c.recurring === "daily");
+    const list = [];
+    daily.forEach(ch => ch.assigned_to.forEach(uid => {
+      const entry = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === uid && l.period === yKey);
+      const stillPending = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === uid && l.status === "pending");
+      if (stillPending) return;
+      if (!entry || entry.status !== "approved") list.push({ chore: ch, userId: uid });
+    }));
+    return list;
+  })();
+  let out = `<div class="content">`;
+  if (missed.length) {
+    out += `<div class="missed-note"><strong>📋 Missed yesterday: </strong>${missed.map(m => { const k = state.members.find(x=>x.id===m.userId); return `${esc(k?.name)} — ${esc(m.chore.title)}`; }).join(", ")}</div>`;
+  }
+  kids.forEach(kid => {
+    const kidChores = state.chores.filter(c => c.assigned_to.includes(kid.id) && isChoreDue(c));
+    out += `<h3 class="section-head">${kid.emoji} ${esc(kid.name)}<span style="font-size:13px;font-weight:600;color:var(--accent);margin-left:auto;">⭐ ${kid.balance} pts</span><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></h3>`;
+    kidChores.forEach(ch => {
+      const status = choreStatus(ch.id, kid.id);
+      const icon = status==="approved"?"✅":status==="pending"?"🕐":"—";
+      const meta = ch.recurring === "fortnightly" ? `every 2 weeks · ${ch.day_of_week}` : ch.recurring;
+      out += `<div class="row"><span class="row-emoji">${ch.emoji}</span><div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta}</span></div><span style="font-size:18px;opacity:${status!=='todo'?1:0.3}">${icon}</span></div>`;
+    });
+  });
+  out += `</div>`;
+  return out;
+}
+
+function renderMyJobs(cu) {
+  const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && isChoreDue(c));
+  let out = `<div class="content"><h3 class="section-head">This week's jobs</h3>`;
+  if (!myChores.length) out += `<p class="empty-msg">No jobs due right now 🎉</p>`;
+  myChores.forEach(ch => {
+    const status = choreStatus(ch.id, cu.id);
+    const meta = ch.recurring === "fortnightly" ? `every 2 weeks · ${ch.day_of_week}` : ch.recurring;
+    out += `<div class="row"><span class="row-emoji">${ch.emoji}</span><div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta}</span></div>`;
+    if (status === "todo") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Done ✋</button>`;
+    else if (status === "pending") out += `<span style="font-size:12px;color:var(--accent);font-weight:600;">Waiting for approval</span>`;
+    else if (status === "approved") out += `<span style="font-size:18px;">✅</span>`;
+    else if (status === "rejected") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Redo ↩️</button>`;
+    out += `</div>`;
+  });
+  out += `</div>`;
+  return out;
+}
+
+function renderChoresTab(cu) {
+  const myParentChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && isChoreDue(c));
+  let out = `<div class="content">`;
+  if (myParentChores.length) {
+    out += `<h3 class="section-head">${cu.emoji} My Jobs</h3>`;
+    myParentChores.forEach(ch => {
+      const status = choreStatus(ch.id, cu.id);
+      const icon = status==="approved"?"✅":status==="pending"?"🕐":"—";
+      const meta = ch.recurring === "fortnightly" ? `every 2 weeks · ${ch.day_of_week}` : ch.recurring;
+      out += `<div class="row"><span class="row-emoji">${ch.emoji}</span><div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta}</span></div><span style="font-size:18px;opacity:${status!=='todo'?1:0.3}">${icon}</span><button class="emoji-btn" style="width:30px;height:30px;font-size:13px;border:none;background:transparent;" onclick="openEditChore(${ch.id})">✏️</button></div>`;
+    });
+  }
+  out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">All jobs</h3><button class="btn-add" onclick="openAddChore()">+ Add</button></div>`;
+  state.chores.forEach(ch => {
+    const names = state.members.filter(m => ch.assigned_to.includes(m.id)).map(m=>m.emoji).join(" ");
+    const dueNote = ch.recurring === "fortnightly" ? (isFortnightActive(ch) ? " · due this week" : " · not due this week") : "";
+    const meta = ch.recurring === "fortnightly" ? `every 2 weeks · ${ch.day_of_week}${dueNote}` : ch.recurring;
+    out += `<div class="row" onclick="openEditChore(${ch.id})"><span class="row-emoji">${ch.emoji}</span><div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta} · ${names}</span></div><span style="font-size:14px;color:var(--textMuted);">✏️</span></div>`;
+  });
+  out += `<button class="btn-dashed" onclick="openAddChore()">+ Add a new job</button></div>`;
+  return out;
+}
+
+function renderShopping() {
+  let out = `<div class="content"><h3 class="section-head">🛒 Shopping List</h3>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <input class="input" id="shop-field" style="flex:1;" value="${esc(state.forms.shoppingInput)}" placeholder="e.g. Milk, bread, bananas…">
+      <button class="btn-add" onclick="addShoppingItem()">+ Add</button>
+    </div>`;
+  const undone = state.shopping.filter(i => !i.done);
+  const done = state.shopping.filter(i => i.done);
+  if (!state.shopping.length) out += `<p class="empty-msg">Nothing on the list yet — add what you need for the next shop 🛒</p>`;
+  undone.forEach(item => {
+    const by = state.members.find(m => m.id === item.added_by);
+    out += `<div class="row"><button class="shopping-check" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">○</button><span class="row-title" style="flex:1;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
+  });
+  if (done.length) {
+    out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin-top:20px;margin-bottom:8px;">Got it ✓</h4>`;
+    done.forEach(item => {
+      const by = state.members.find(m => m.id === item.added_by);
+      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">✓</button><span class="row-title" style="flex:1;text-decoration:line-through;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
+    });
+    out += `<button class="chip" style="width:100%;text-align:center;margin-top:10px;" onclick="clearCheckedShopping()">Clear checked items</button>`;
+  }
+  out += `</div>`;
+  return out;
+}
+
+function renderApprove(pendingApprovals, pendingClaims) {
+  let out = `<div class="content"><h3 class="section-head">Jobs to approve</h3>`;
+  if (!pendingApprovals.length) out += `<p class="empty-msg">Nothing to approve right now 👍</p>`;
+  pendingApprovals.forEach(entry => {
+    const chore = state.chores.find(c => c.id === entry.chore_id);
+    const who = state.members.find(f => f.id === entry.user_id);
+    out += `<div class="approval-row"><div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${chore?.emoji||"❓"}</span><div><span class="row-title">${esc(chore?.title||"Removed job")}</span><br><span class="row-meta">${esc(who?.name)} · ${chore?.points||0} pts</span></div></div><div style="display:flex;gap:8px;"><button class="approve-btn" onclick='approveChore(${JSON.stringify(entry)})'>✅</button><button class="reject-btn" onclick='rejectChore(${JSON.stringify(entry)})'>↩️</button></div></div>`;
+  });
+  out += `<h3 class="section-head" style="margin-top:24px;">🎁 Reward claims</h3>`;
+  if (!pendingClaims.length) out += `<p class="empty-msg">No reward claims waiting 👍</p>`;
+  pendingClaims.forEach(claim => {
+    const reward = state.rewards.find(r => r.id === claim.reward_id);
+    const who = state.members.find(f => f.id === claim.user_id);
+    out += `<div class="approval-row"><div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${reward?.emoji||"🎁"}</span><div><span class="row-title">${esc(reward?.title||"Removed reward")}</span><br><span class="row-meta">${esc(who?.name)} · ⭐ ${reward?.cost||0} pts</span></div></div><div style="display:flex;gap:8px;"><button class="approve-btn" onclick='approveRewardClaim(${JSON.stringify(claim)})'>✅</button><button class="reject-btn" onclick='rejectRewardClaim(${JSON.stringify(claim)})'>↩️</button></div></div>`;
+  });
+  out += `<p style="font-size:12px;color:var(--textMuted);margin-top:8px;">Approving confirms the reward has actually been given and deducts the points. Declining keeps the points in their balance.</p></div>`;
+  return out;
+}
+
+function renderRewards(isParent, cu) {
+  let out = `<div class="content">`;
+  if (isParent) {
+    out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">Reward shop</h3><button class="btn-add" onclick="openAddReward()">+ Add</button></div><div class="reward-grid">`;
+    state.rewards.forEach(r => {
+      out += `<div class="reward-card" onclick="openEditReward(${r.id})" style="cursor:pointer;"><span style="font-size:28px;">${r.emoji}</span><span class="reward-title">${esc(r.title)}</span><span class="reward-cost">⭐ ${r.cost} pts</span><span style="font-size:12px;color:var(--textMuted);margin-top:2px;">✏️ tap to edit</span></div>`;
+    });
+    out += `</div><button class="btn-dashed" onclick="openAddReward()">+ Add a new reward</button>`;
+  } else {
+    const held = pendingSpendFor(cu.id);
+    out += `<h3 class="section-head">Balance: ⭐ ${cu.balance} pts</h3>`;
+    if (held > 0) out += `<p style="font-size:12px;color:var(--accent);margin-top:-8px;margin-bottom:14px;">⭐ ${held} pts held for claims awaiting approval · ${availableBalance(cu.id)} available to spend</p>`;
+    out += `<div class="reward-grid">`;
+    state.rewards.forEach(r => {
+      const myPending = state.rewardClaims.find(rc => rc.reward_id === r.id && rc.user_id === cu.id && rc.status === "pending");
+      const canAfford = availableBalance(cu.id) >= r.cost;
+      out += `<div class="reward-card"><span style="font-size:28px;">${r.emoji}</span><span class="reward-title">${esc(r.title)}</span><span class="reward-cost">⭐ ${r.cost} pts</span>`;
+      if (myPending) out += `<span style="font-size:11px;color:var(--accent);font-weight:700;margin-top:4px;">🕐 Awaiting approval</span>`;
+      else if (canAfford) out += `<button class="claim-btn" onclick='claimReward(${JSON.stringify(r)})'>Claim</button>`;
+      else out += `<button class="claim-btn-off" disabled>Need ${r.cost - availableBalance(cu.id)} more</button>`;
+      out += `</div>`;
+    });
+    out += `</div>`;
+  }
+  out += `</div>`;
+  return out;
+}
+
+function renderScores(kids) {
+  let out = `<div class="content"><h3 class="section-head">Leaderboard</h3>`;
+  [...kids].sort((a,b) => b.total_earned - a.total_earned).forEach((kid, i) => {
+    const spentApproved = state.rewardClaims.filter(rc => rc.user_id===kid.id && rc.status==="approved").reduce((s,rc)=> s + (state.rewards.find(r=>r.id===rc.reward_id)?.cost||0), 0);
+    const pendingChorePts = state.choreLog.filter(l => l.user_id===kid.id && l.status==="pending").reduce((s,l)=> s + (state.chores.find(c=>c.id===l.chore_id)?.points||0), 0);
+    const pendingSpend = pendingSpendFor(kid.id);
+    out += `<div class="score-row"><span style="font-size:24px;">${i===0?"🥇":i===1?"🥈":"🥉"}</span><span style="font-size:28px;">${kid.emoji}</span><div style="flex:1;"><span class="score-name">${esc(kid.name)}</span><div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--primary);font-weight:600;">Balance: ⭐ ${kid.balance}</span>
+      <span style="font-size:12px;color:var(--textMuted);">Total earned: ${kid.total_earned}</span>
+      ${spentApproved>0?`<span style="font-size:12px;color:#6B7280;">Spent: ${spentApproved}</span>`:""}
+      ${pendingChorePts>0?`<span style="font-size:12px;color:var(--accent);">🕐 +${pendingChorePts} pts pending</span>`:""}
+      ${pendingSpend>0?`<span style="font-size:12px;color:var(--accent);">🕐 −${pendingSpend} pts on hold</span>`:""}
+    </div></div></div>`;
+  });
+  out += `</div>`;
+  return out;
+}
+
+function renderSettings(kids) {
+  let out = `<div class="content"><h3 class="section-head">⚙️ Family Settings</h3>
+    <h4 style="font-size:14px;font-weight:700;margin:20px 0 10px;">Family Members</h4>`;
+  state.members.forEach(m => {
+    out += `<div class="row" onclick="openEditProfile(${m.id})"><span style="font-size:24px;">${m.emoji}</span><div class="row-info"><span class="row-title">${esc(m.name)}</span><span class="row-meta">${m.role==="parent"?"Admin / Parent":"Child"} · PIN: ${m.pin}</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
+  });
+  out += `<button class="btn-dashed" onclick="openAddMember()">+ Add family member</button>
+    <h4 style="font-size:14px;font-weight:700;margin:24px 0 10px;">Points Management</h4>`;
+  kids.forEach(kid => {
+    out += `<div class="row"><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)}</span><span class="row-meta">Balance: ⭐ ${kid.balance} · Total earned: ${kid.total_earned}</span></div><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></div>`;
+  });
+  out += `</div>`;
+  return out;
+}
+
+function renderProfile(cu) {
+  const held = pendingSpendFor(cu.id);
+  let out = `<div class="content"><div style="text-align:center;padding:20px 0;">
+    <span style="font-size:56px;">${cu.emoji}</span>
+    <h3 style="font-size:20px;font-weight:700;margin:10px 0 4px;">${esc(cu.name)}</h3>
+    <div style="display:flex;justify-content:center;gap:20px;margin-top:16px;">
+      <div class="profile-stat"><span style="font-size:18px;font-weight:700;">⭐ ${cu.balance}</span><span style="font-size:11px;color:var(--textMuted);margin-top:4px;">Balance</span></div>
+      <div class="profile-stat"><span style="font-size:18px;font-weight:700;">${cu.total_earned}</span><span style="font-size:11px;color:var(--textMuted);margin-top:4px;">Total earned</span></div>
+      <div class="profile-stat"><span style="font-size:18px;font-weight:700;">${cu.total_earned - cu.balance}</span><span style="font-size:11px;color:var(--textMuted);margin-top:4px;">Spent</span></div>
+    </div>
+    ${held>0?`<p style="font-size:12px;color:var(--accent);margin-top:10px;">🕐 ⭐ ${held} pts on hold for claims awaiting approval</p>`:""}
+  </div>
+  <button class="chip" style="width:100%;text-align:center;margin-top:12px;" onclick="openEditProfile(${JSON.stringify(cu)})">✏️ Edit my name &amp; emoji</button>
+  </div>`;
+  return out;
+}
+
+// ---------- modals ----------
+function renderModal() {
+  let inner = "";
+  const isParent = state.currentUser.role === "parent";
+  if (state.modal === "addChore" || state.modal === "editChore") {
+    const f = state.forms.chore;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addChore"?"Add a job":"Edit job"}</h3>
+      <label class="label">What's the job?</label>
+      <input class="input" id="f-title" value="${esc(f.title)}" placeholder="e.g. Walk the dog">
+      <label class="label">Icon</label>
+      <div class="emoji-row">${CHORE_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.chore.emoji='${em}';render()">${em}</button>`).join("")}</div>
+      <label class="label">Points</label>
+      <div class="chip-row">${[5,10,15,20,25,30].map(p=>`<button class="chip ${f.points===p?'active':''}" onclick="state.forms.chore.points=${p};render()">${p}</button>`).join("")}</div>
+      <label class="label">How often?</label>
+      <div class="chip-row">${["daily","weekly","fortnightly","one-off"].map(r=>`<button class="chip ${f.recurring===r?'active':''}" onclick="state.forms.chore.recurring='${r}';render()">${r}</button>`).join("")}</div>
+      ${f.recurring==="fortnightly" ? `
+        <label class="label">Which day?</label>
+        <div class="chip-row">${DAYS.map(d=>`<button class="chip ${f.dayOfWeek===d?'active':''}" onclick="state.forms.chore.dayOfWeek='${d}';render()">${d}</button>`).join("")}</div>
+        <label class="label">First due date</label>
+        <input class="input" type="date" id="f-startdate" value="${f.startDate}">
+        <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">To alternate two fortnightly jobs (like black bin / green bin), give them start dates one week apart.</p>
+      ` : ""}
+      <label class="label">Assign to</label>
+      <div class="chip-row">${state.members.map(m=>`<button class="chip ${f.assignedTo.includes(m.id)?'active':''}" onclick="toggleAssign(${m.id})">${m.emoji} ${esc(m.name)}</button>`).join("")}</div>
+      <div class="modal-btns">
+        ${state.modal==="editChore"?`<button class="delete-btn" onclick="deleteChoreForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveChoreForm()">Save</button>
+      </div>`;
+  } else if (state.modal === "addReward" || state.modal === "editReward") {
+    const f = state.forms.reward;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addReward"?"Add a reward":"Edit reward"}</h3>
+      <label class="label">What's the reward?</label>
+      <input class="input" id="f-title" value="${esc(f.title)}" placeholder="e.g. Extra screen time">
+      <label class="label">Icon</label>
+      <div class="emoji-row">${REWARD_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.reward.emoji='${em}';render()">${em}</button>`).join("")}</div>
+      <label class="label">Cost (points)</label>
+      <div class="chip-row">${[10,20,30,40,50,60,80,100].map(p=>`<button class="chip ${f.cost===p?'active':''}" onclick="state.forms.reward.cost=${p};render()">${p}</button>`).join("")}</div>
+      <div class="modal-btns">
+        ${state.modal==="editReward"?`<button class="delete-btn" onclick="deleteRewardForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveRewardForm()">Save</button>
+      </div>`;
+  } else if (state.modal === "deduct") {
+    const f = state.forms.deduct;
+    const m = state.members.find(x=>x.id===f.childId);
+    inner = `
+      <h3 class="modal-title">Deduct points</h3>
+      <div class="row" style="cursor:default;margin-bottom:16px;"><span style="font-size:28px;">${m?.emoji}</span><div class="row-info"><span class="row-title">${esc(m?.name)}</span><span class="row-meta">Current balance: ⭐ ${m?.balance}</span></div></div>
+      <label class="label">How many points?</label>
+      <div class="chip-row">${[5,10,15,20,25,30].map(p=>`<button class="chip ${f.amount===p?'active':''}" onclick="state.forms.deduct.amount=${p};render()">${p}</button>`).join("")}</div>
+      <label class="label">Reason</label>
+      <input class="input" id="f-reason" value="${esc(f.reason)}" placeholder="e.g. Didn't tidy up after being asked">
+      <div class="modal-btns"><div style="flex:1;"></div><button class="cancel-btn" onclick="closeModal()">Cancel</button><button class="save-btn" style="background:#DC2626;" onclick="confirmDeduct()">Deduct ${f.amount} pts</button></div>`;
+  } else if (state.modal === "addMember" || state.modal === "editProfile") {
+    const f = state.forms.profile;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addMember"?"Add family member":`Edit ${esc(state.editTarget?.name)}'s profile`}</h3>
+      <label class="label">Name</label>
+      <input class="input" id="f-name" value="${esc(f.name)}" placeholder="e.g. Grandma">
+      <label class="label">Avatar</label>
+      <div class="emoji-row">${PROFILE_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.profile.emoji='${em}';render()">${em}</button>`).join("")}</div>
+      ${isParent ? `
+        <label class="label">PIN</label>
+        <input class="input" id="f-pin" style="max-width:120px;letter-spacing:6px;text-align:center;font-weight:700;" maxlength="4" value="${esc(f.pin)}" placeholder="0000">
+        <label class="label">Role</label>
+        <div class="chip-row">
+          <button class="chip ${f.role==='child'?'active':''}" onclick="state.forms.profile.role='child';render()">Child</button>
+          <button class="chip ${f.role==='parent'?'active':''}" onclick="state.forms.profile.role='parent';render()">Admin / Parent</button>
+        </div>` : ""}
+      <div class="modal-btns">
+        ${state.modal==="editProfile" && isParent && state.editTarget?.id !== state.currentUser?.id ? `<button class="delete-btn" onclick="deleteMemberForm(${state.editTarget.id})">🗑️ Remove</button>` : ""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveMemberForm()">Save</button>
+      </div>`;
+  }
+  return `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${inner}</div></div>`;
+}
+
+function toggleAssign(id) {
+  const f = state.forms.chore;
+  f.assignedTo = f.assignedTo.includes(id) ? f.assignedTo.filter(x=>x!==id) : [...f.assignedTo, id];
+  render();
+}
+
+function wireModalInputs() {
+  const map = [
+    ["f-title", (v) => { if (state.modal==="addChore"||state.modal==="editChore") state.forms.chore.title = v; else state.forms.reward.title = v; }],
+    ["f-startdate", (v) => state.forms.chore.startDate = v],
+    ["f-reason", (v) => state.forms.deduct.reason = v],
+    ["f-name", (v) => state.forms.profile.name = v],
+    ["f-pin", (v) => state.forms.profile.pin = v.replace(/\D/g,"")],
+  ];
+  map.forEach(([id, setter]) => {
+    const el = document.getElementById(id);
+    if (el) { el.oninput = (e) => setter(e.target.value); }
+  });
+}
+
+// expose functions used by inline onclick handlers
+Object.assign(window, {
+  handleProfileTap, handlePinSubmit, handleLogout, markDone, approveChore, rejectChore,
+  claimReward, approveRewardClaim, rejectRewardClaim, confirmDeduct, saveChoreForm, deleteChoreForm,
+  saveRewardForm, deleteRewardForm, saveMemberForm, deleteMemberForm, addShoppingItem, toggleShoppingItem,
+  removeShoppingItem, clearCheckedShopping, openAddChore, openEditChore, openAddReward, openEditReward,
+  openDeduct, openAddMember, openEditProfile, closeModal, toggleAssign, state, render
+});
+
+// ---------- boot ----------
+fetchAll().then(subscribeRealtime);
+</script>
+</body>
+</html>
