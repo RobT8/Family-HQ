@@ -292,7 +292,7 @@ async function clearCheckedShopping() {
   showToast("Cleared checked items");
 }
 
-function handleProfileTap(member) { state.pinTarget = member; state.pinInput = ""; render(); }
+function handleProfileTap(id) { const member = state.members.find(m => m.id === id); if (!member) return; state.pinTarget = member; state.pinInput = ""; render(); }
 function handlePinSubmit() {
   const pt = state.pinTarget;
   if (!pt) return;
