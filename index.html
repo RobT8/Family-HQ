@@ -307,12 +307,12 @@ function handlePinSubmit() {
 function handleLogout() { state.currentUser = null; state.screen = "login"; state.pinTarget = null; state.pinInput = ""; state.tab = "myjobs"; render(); }
 
 function openAddChore() { state.forms.chore = { title:"", points:5, emoji:"⭐", assignedTo:[], recurring:"daily", dayOfWeek:"Sun", startDate: todayKey() }; state.modal = "addChore"; render(); }
-function openEditChore(ch) { state.editTarget = ch; state.forms.chore = { title: ch.title, points: ch.points, emoji: ch.emoji, assignedTo: [...ch.assigned_to], recurring: ch.recurring, dayOfWeek: ch.day_of_week || "Sun", startDate: ch.start_date || todayKey() }; state.modal = "editChore"; render(); }
+function openEditChore(id) { const ch = state.chores.find(c => c.id === id); if (!ch) return; state.editTarget = ch; state.forms.chore = { title: ch.title, points: ch.points, emoji: ch.emoji, assignedTo: [...ch.assigned_to], recurring: ch.recurring, dayOfWeek: ch.day_of_week || "Sun", startDate: ch.start_date || todayKey() }; state.modal = "editChore"; render(); }
 function openAddReward() { state.forms.reward = { title:"", cost:30, emoji:"🎁" }; state.modal = "addReward"; render(); }
-function openEditReward(r) { state.editTarget = r; state.forms.reward = { title: r.title, cost: r.cost, emoji: r.emoji }; state.modal = "editReward"; render(); }
+function openEditReward(id) { const r = state.rewards.find(x => x.id === id); if (!r) return; state.editTarget = r; state.forms.reward = { title: r.title, cost: r.cost, emoji: r.emoji }; state.modal = "editReward"; render(); }
 function openDeduct(childId) { state.forms.deduct = { childId, amount: 5, reason: "" }; state.modal = "deduct"; render(); }
 function openAddMember() { state.forms.profile = { name:"", emoji:"🧒", pin:"0000", role:"child" }; state.modal = "addMember"; render(); }
-function openEditProfile(m) { state.editTarget = m; state.forms.profile = { name: m.name, emoji: m.emoji, pin: m.pin, role: m.role }; state.modal = "editProfile"; render(); }
+function openEditProfile(id) { const m = state.members.find(x => x.id === id); if (!m) return; state.editTarget = m; state.forms.profile = { name: m.name, emoji: m.emoji, pin: m.pin, role: m.role }; state.modal = "editProfile"; render(); }
 function closeModal() { state.modal = null; state.editTarget = null; render(); }
 
 // ---------- render ----------
@@ -607,7 +607,7 @@ function renderProfile(cu) {
     </div>
     ${held>0?`<p style="font-size:12px;color:var(--accent);margin-top:10px;">🕐 ⭐ ${held} pts on hold for claims awaiting approval</p>`:""}
   </div>
-  <button class="chip" style="width:100%;text-align:center;margin-top:12px;" onclick="openEditProfile(${JSON.stringify(cu)})">✏️ Edit my name &amp; emoji</button>
+  <button class="chip" style="width:100%;text-align:center;margin-top:12px;" onclick="openEditProfile(${cu.id})">✏️ Edit my name &amp; emoji</button>
   </div>`;
   return out;
 }
