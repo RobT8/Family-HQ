@@ -99,6 +99,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // ---------- state ----------
 let state = {
   members: [], chores: [], choreLog: [], rewards: [], rewardClaims: [], shopping: [],
+  events: [], holidays: [], childcare: [], selectedHoliday: null,
   currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
@@ -106,12 +107,16 @@ let state = {
     reward: { title: "", cost: 30, emoji: "🎁" },
     deduct: { childId: null, amount: 5, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
+    event: { title: "", emoji: "⭐", forType: "family", forId: null, date: todayKey(), time: "16:00", recurring: false },
+    holiday: { name: "", startDate: todayKey(), endDate: todayKey() },
+    care: { holidayId: null, date: null, childId: null, carer: "", activity: "", slot: "all" },
     shoppingInput: ""
   }
 };
 const CHORE_EMOJIS = ["⭐","🛏️","🍽️","🧹","♻️","🐱","🍴","🧺","🚿","📚","🌿","🗑️","🐕","🧽"];
 const REWARD_EMOJIS = ["🎁","📱","🎬","🌙","🍬","🏠","💷","🎮","🍕","🎪","🛍️","🧸","🎂","⛱️"];
 const PROFILE_EMOJIS = ["👨","👩","🧒","👦","👧","👶","🧑","👱","👸","🤴","🦸","🧑‍🎓","🧑‍💻","🐶","🐱"];
+const EVENT_EMOJIS = ["⭐","🎂","🏥","🦷","⚽","🎵","🎨","✂️","🏊","🎭","📚","🚗","🎉","🧑‍⚕️"];
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
 function todayKey() { return new Date().toISOString().slice(0,10); }
@@ -119,6 +124,23 @@ function yesterdayKey() { const d = new Date(); d.setDate(d.getDate()-1); return
 function weekKey(dateObj) {
   const d = new Date(dateObj); const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff); return d.toISOString().slice(0,10);
+}
+function formatDateNice(dateStr) {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+function datesInRange(start, end) {
+  const dates = [];
+  let d = new Date(start + "T00:00:00");
+  const endD = new Date(end + "T00:00:00");
+  while (d <= endD) { dates.push(d.toISOString().slice(0,10)); d.setDate(d.getDate() + 1); }
+  return dates;
+}
+function nextOccurrence(ev) {
+  if (!ev.recurrence || ev.recurrence.type !== "weekly") return ev.event_date;
+  let d = new Date(ev.event_date + "T00:00:00");
+  const today = new Date(); today.setHours(0,0,0,0);
+  while (d < today) d.setDate(d.getDate() + 7);
+  return d.toISOString().slice(0,10);
 }
 function isFortnightActive(chore, refDate = new Date()) {
   if (!chore.start_date) return true;
@@ -154,13 +176,16 @@ function availableBalance(userId) {
 
 // ---------- data layer ----------
 async function fetchAll() {
-  const [members, chores, choreLog, rewards, rewardClaims, shopping] = await Promise.all([
+  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare] = await Promise.all([
     sb.from("familyhq_members").select("*").order("id"),
     sb.from("familyhq_chores").select("*").order("id"),
     sb.from("familyhq_chore_log").select("*"),
     sb.from("familyhq_rewards").select("*").order("id"),
     sb.from("familyhq_reward_claims").select("*"),
-    sb.from("familyhq_shopping_list").select("*").order("created_at")
+    sb.from("familyhq_shopping_list").select("*").order("created_at"),
+    sb.from("familyhq_events").select("*").order("event_date"),
+    sb.from("familyhq_holidays").select("*").order("start_date"),
+    sb.from("familyhq_childcare").select("*").order("care_date")
   ]);
   state.members = members.data || [];
   state.chores = chores.data || [];
@@ -168,6 +193,9 @@ async function fetchAll() {
   state.rewards = rewards.data || [];
   state.rewardClaims = rewardClaims.data || [];
   state.shopping = shopping.data || [];
+  state.events = events.data || [];
+  state.holidays = holidays.data || [];
+  state.childcare = childcare.data || [];
   state.loaded = true;
   // keep currentUser in sync with fresh data
   if (state.currentUser) {
@@ -185,6 +213,9 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_rewards" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_reward_claims" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_shopping_list" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_events" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_holidays" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_childcare" }, fetchAll)
     .subscribe();
 }
 
@@ -325,6 +356,93 @@ async function clearCheckedShopping() {
   showToast("Cleared checked items");
 }
 
+// ---------- calendar actions ----------
+function openAddEvent() { state.forms.event = { title: "", emoji: "⭐", forType: "family", forId: null, date: todayKey(), time: "16:00", recurring: false }; state.modal = "addEvent"; render(); }
+function openEditEvent(id) {
+  const ev = state.events.find(e => e.id === id);
+  if (!ev) return;
+  state.editTarget = ev;
+  state.forms.event = {
+    title: ev.title, emoji: ev.emoji, date: ev.event_date, time: ev.event_time,
+    forType: ev.child_id ? "child" : ev.parent_id ? "parent" : "family",
+    forId: ev.child_id || ev.parent_id || null,
+    recurring: !!(ev.recurrence && ev.recurrence.type === "weekly")
+  };
+  state.modal = "editEvent"; render();
+}
+async function saveEventForm() {
+  const f = state.forms.event;
+  if (!f.title.trim() || !f.date) { showToast("Add a title and date"); return; }
+  if (f.forType !== "family" && !f.forId) { showToast("Pick who this is for"); return; }
+  const payload = {
+    title: f.title, emoji: f.emoji, event_date: f.date, event_time: f.time,
+    child_id: f.forType === "child" ? f.forId : null,
+    parent_id: f.forType === "parent" ? f.forId : null,
+    recurrence: f.recurring ? { type: "weekly" } : null
+  };
+  let error;
+  if (state.modal === "addEvent") { ({ error } = await sb.from("familyhq_events").insert({ id: Date.now(), ...payload })); if (!error) showToast("Event added 📅"); }
+  else { ({ error } = await sb.from("familyhq_events").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Event updated 📅"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveEventForm error:", error); return; }
+  state.modal = null; state.editTarget = null; render();
+}
+async function deleteEventForm(id) {
+  const { error } = await sb.from("familyhq_events").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteEventForm error:", error); return; }
+  showToast("Event removed"); state.modal = null; render();
+}
+function openAddHoliday() { state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey() }; state.modal = "addHoliday"; render(); }
+function openEditHoliday(id) {
+  const h = state.holidays.find(x => x.id === id);
+  if (!h) return;
+  state.editTarget = h;
+  state.forms.holiday = { name: h.name, startDate: h.start_date, endDate: h.end_date };
+  state.modal = "editHoliday"; render();
+}
+async function saveHolidayForm() {
+  const f = state.forms.holiday;
+  if (!f.name.trim() || !f.startDate || !f.endDate) { showToast("Fill in all fields"); return; }
+  if (f.endDate < f.startDate) { showToast("End date is before the start date"); return; }
+  const payload = { name: f.name, start_date: f.startDate, end_date: f.endDate };
+  let error;
+  if (state.modal === "addHoliday") { ({ error } = await sb.from("familyhq_holidays").insert({ id: Date.now(), ...payload })); if (!error) showToast("Holiday added 🏖️"); }
+  else { ({ error } = await sb.from("familyhq_holidays").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Holiday updated 🏖️"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveHolidayForm error:", error); return; }
+  state.modal = null; state.editTarget = null; render();
+}
+async function deleteHolidayForm(id) {
+  const { error } = await sb.from("familyhq_holidays").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteHolidayForm error:", error); return; }
+  await sb.from("familyhq_childcare").delete().eq("holiday_id", id);
+  showToast("Holiday removed"); state.modal = null; state.selectedHoliday = null; render();
+}
+function openAddCare(holidayId, date) { state.forms.care = { holidayId, date, childId: null, carer: "", activity: "", slot: "all" }; state.modal = "addCare"; render(); }
+function openEditCare(id) {
+  const c = state.childcare.find(x => x.id === id);
+  if (!c) return;
+  state.editTarget = c;
+  state.forms.care = { holidayId: c.holiday_id, date: c.care_date, childId: c.child_id, carer: c.carer, activity: c.activity || "", slot: c.slot };
+  state.modal = "editCare"; render();
+}
+async function saveCareForm() {
+  const f = state.forms.care;
+  if (!f.childId) { showToast("Pick a child"); return; }
+  if (!f.carer.trim()) { showToast("Who's looking after them?"); return; }
+  const payload = { holiday_id: f.holidayId, care_date: f.date, child_id: f.childId, carer: f.carer, activity: f.activity, slot: f.slot };
+  let error;
+  if (state.modal === "addCare") { ({ error } = await sb.from("familyhq_childcare").insert({ id: Date.now(), ...payload })); if (!error) showToast("Care added ✅"); }
+  else { ({ error } = await sb.from("familyhq_childcare").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Care updated ✅"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveCareForm error:", error); return; }
+  state.modal = null; state.editTarget = null; render();
+}
+async function deleteCareForm(id) {
+  const { error } = await sb.from("familyhq_childcare").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteCareForm error:", error); return; }
+  showToast("Care entry removed"); state.modal = null; render();
+}
+function selectHoliday(id) { state.selectedHoliday = id; render(); }
+function backToHolidays() { state.selectedHoliday = null; render(); }
+
 function handleProfileTap(id) { const member = state.members.find(m => m.id === id); if (!member) return; state.pinTarget = member; state.pinInput = ""; render(); }
 function handlePinSubmit() {
   const pt = state.pinTarget;
@@ -420,9 +538,9 @@ function renderHome() {
   const tabs = isParent ? [
     ["myjobs","Overview"], ["chores","Jobs"], ["shopping","Shopping"],
     ["approve", approveCount ? `Approve (${approveCount})` : "Approve"],
-    ["rewards","Rewards"], ["scores","Scores"], ["settings","⚙️"]
+    ["rewards","Rewards"], ["scores","Scores"], ["calendar","📅"], ["settings","⚙️"]
   ] : [
-    ["myjobs","My Jobs"], ["shopping","Shopping"], ["rewards","Rewards"], ["scores","Scores"], ["profile","My Profile"]
+    ["myjobs","My Jobs"], ["shopping","Shopping"], ["rewards","Rewards"], ["scores","Scores"], ["calendar","📅"], ["profile","My Profile"]
   ];
 
   let out = `
@@ -444,6 +562,7 @@ function renderHome() {
   else if (state.tab === "approve" && isParent) out += renderApprove(pendingApprovals, pendingClaims);
   else if (state.tab === "rewards") out += renderRewards(isParent, cu);
   else if (state.tab === "scores") out += renderScores(kids);
+  else if (state.tab === "calendar") out += renderCalendar(cu, isParent);
   else if (state.tab === "settings" && isParent) out += renderSettings(kids);
   else if (state.tab === "profile" && !isParent) out += renderProfile(cu);
 
@@ -645,6 +764,61 @@ function renderProfile(cu) {
   return out;
 }
 
+function renderCalendar(cu, isParent) {
+  if (state.selectedHoliday) {
+    const h = state.holidays.find(x => x.id === state.selectedHoliday);
+    if (h) return renderHolidayDetail(h, cu, isParent);
+    state.selectedHoliday = null;
+  }
+  const today = todayKey();
+  const events = state.events
+    .map(ev => ({ ...ev, _next: nextOccurrence(ev) }))
+    .sort((a,b) => (a._next + a.event_time).localeCompare(b._next + b.event_time));
+
+  let out = `<div class="content">`;
+  out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">📅 Upcoming Events</h3>${isParent?`<button class="btn-add" onclick="openAddEvent()">+ Add</button>`:""}</div>`;
+  if (!events.length) out += `<p class="empty-msg">No events yet</p>`;
+  events.forEach(ev => {
+    const forMember = ev.child_id ? state.members.find(m=>m.id===ev.child_id) : ev.parent_id ? state.members.find(m=>m.id===ev.parent_id) : null;
+    out += `<div class="row" ${isParent?`onclick="openEditEvent(${ev.id})"`:""}><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${formatDateNice(ev._next)} · ${ev.event_time}${ev.recurrence?" · repeats weekly":""} · ${forMember?`${forMember.emoji} ${esc(forMember.name)}`:"👪 Family"}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
+  });
+  if (isParent) out += `<button class="btn-dashed" onclick="openAddEvent()">+ Add an event</button>`;
+
+  out += `<div class="mgmt-header" style="margin-top:28px;"><h3 class="section-head" style="margin:0;">🏖️ School Holidays</h3>${isParent?`<button class="btn-add" onclick="openAddHoliday()">+ Add</button>`:""}</div>`;
+  const holidays = [...state.holidays].sort((a,b) => a.start_date.localeCompare(b.start_date));
+  if (!holidays.length) out += `<p class="empty-msg">No holidays added yet</p>`;
+  holidays.forEach(h => {
+    const isNow = today >= h.start_date && today <= h.end_date;
+    out += `<div class="row" onclick="selectHoliday(${h.id})"><span class="row-emoji">🏖️</span><div class="row-info"><span class="row-title">${esc(h.name)}${isNow?` <span style="color:var(--success);font-size:12px;font-weight:700;">● Now</span>`:""}</span><span class="row-meta">${formatDateNice(h.start_date)} – ${formatDateNice(h.end_date)}</span></div><span style="font-size:14px;color:var(--textMuted);">›</span></div>`;
+  });
+  if (isParent) out += `<button class="btn-dashed" onclick="openAddHoliday()">+ Add a holiday</button>`;
+  out += `</div>`;
+  return out;
+}
+
+function renderHolidayDetail(h, cu, isParent) {
+  const dates = datesInRange(h.start_date, h.end_date);
+  let out = `<div class="content">
+    <button class="back-link" style="margin:0 0 12px;padding:0;" onclick="backToHolidays()">← All holidays</button>
+    <div class="mgmt-header"><h3 class="section-head" style="margin:0;">🏖️ ${esc(h.name)}</h3>${isParent?`<button class="btn-add" onclick="openEditHoliday(${h.id})">✏️ Edit</button>`:""}</div>
+    <p style="font-size:13px;color:var(--textMuted);margin-top:-8px;margin-bottom:16px;">${formatDateNice(h.start_date)} – ${formatDateNice(h.end_date)}</p>`;
+
+  dates.forEach(date => {
+    const rows = state.childcare.filter(c => c.holiday_id === h.id && c.care_date === date && (isParent || c.child_id === cu.id));
+    if (!isParent && !rows.length) return;
+    out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin:14px 0 6px;">${formatDateNice(date)}</h4>`;
+    if (!rows.length) out += `<p style="font-size:13px;color:var(--textMuted);margin:0 0 6px;">Nothing arranged yet</p>`;
+    rows.forEach(c => {
+      const kid = state.members.find(m => m.id === c.child_id);
+      const slotLabel = c.slot === "am" ? "Morning" : c.slot === "pm" ? "Afternoon" : "All day";
+      out += `<div class="row" ${isParent?`onclick="openEditCare(${c.id})"`:""}><span style="font-size:20px;">${kid?.emoji||"🧒"}</span><div class="row-info"><span class="row-title">${esc(kid?.name||"?")} · ${esc(c.carer)}</span><span class="row-meta">${slotLabel}${c.activity?` · ${esc(c.activity)}`:""}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
+    });
+    if (isParent) out += `<button class="chip" style="width:100%;text-align:center;margin-bottom:4px;" onclick="openAddCare(${h.id},'${date}')">+ Add for this day</button>`;
+  });
+  out += `</div>`;
+  return out;
+}
+
 // ---------- modals ----------
 function renderModal() {
   let inner = "";
@@ -725,6 +899,70 @@ function renderModal() {
         <button class="cancel-btn" onclick="closeModal()">Cancel</button>
         <button class="save-btn" onclick="saveMemberForm()">Save</button>
       </div>`;
+  } else if (state.modal === "addEvent" || state.modal === "editEvent") {
+    const f = state.forms.event;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addEvent"?"Add an event":"Edit event"}</h3>
+      <label class="label">What's happening?</label>
+      <input class="input" id="f-event-title" value="${esc(f.title)}" placeholder="e.g. Dentist appointment">
+      <label class="label">Icon</label>
+      <div class="emoji-row">${EVENT_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.event.emoji='${em}';render()">${em}</button>`).join("")}</div>
+      <label class="label">Date</label>
+      <input class="input" type="date" id="f-event-date" value="${f.date}">
+      <label class="label">Time</label>
+      <input class="input" type="time" id="f-event-time" value="${f.time}">
+      <label class="label">Who's this for?</label>
+      <div class="chip-row">
+        <button class="chip ${f.forType==='family'?'active':''}" onclick="state.forms.event.forType='family';state.forms.event.forId=null;render()">👪 Family</button>
+        ${state.members.map(m=>`<button class="chip ${f.forType===m.role && f.forId===m.id?'active':''}" onclick="state.forms.event.forType='${m.role}';state.forms.event.forId=${m.id};render()">${m.emoji} ${esc(m.name)}</button>`).join("")}
+      </div>
+      <label class="label">Repeats</label>
+      <div class="chip-row"><button class="chip ${f.recurring?'active':''}" onclick="state.forms.event.recurring=!state.forms.event.recurring;render()">🔁 Weekly</button></div>
+      <div class="modal-btns">
+        ${state.modal==="editEvent"?`<button class="delete-btn" onclick="deleteEventForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveEventForm()">Save</button>
+      </div>`;
+  } else if (state.modal === "addHoliday" || state.modal === "editHoliday") {
+    const f = state.forms.holiday;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addHoliday"?"Add a school holiday":"Edit holiday"}</h3>
+      <label class="label">Name</label>
+      <input class="input" id="f-holiday-name" value="${esc(f.name)}" placeholder="e.g. Summer Holidays">
+      <label class="label">Start date</label>
+      <input class="input" type="date" id="f-holiday-start" value="${f.startDate}">
+      <label class="label">End date</label>
+      <input class="input" type="date" id="f-holiday-end" value="${f.endDate}">
+      <div class="modal-btns">
+        ${state.modal==="editHoliday"?`<button class="delete-btn" onclick="deleteHolidayForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveHolidayForm()">Save</button>
+      </div>`;
+  } else if (state.modal === "addCare" || state.modal === "editCare") {
+    const f = state.forms.care;
+    const kids = state.members.filter(m => m.role === "child");
+    inner = `
+      <h3 class="modal-title">${state.modal==="addCare"?"Add care":"Edit care"} · ${formatDateNice(f.date)}</h3>
+      <label class="label">Child</label>
+      <div class="chip-row">${kids.map(k=>`<button class="chip ${f.childId===k.id?'active':''}" onclick="state.forms.care.childId=${k.id};render()">${k.emoji} ${esc(k.name)}</button>`).join("")}</div>
+      <label class="label">Who's looking after them?</label>
+      <input class="input" id="f-care-carer" value="${esc(f.carer)}" placeholder="e.g. Grandma, Nursery, Dad">
+      <label class="label">When</label>
+      <div class="chip-row">
+        <button class="chip ${f.slot==='all'?'active':''}" onclick="state.forms.care.slot='all';render()">All day</button>
+        <button class="chip ${f.slot==='am'?'active':''}" onclick="state.forms.care.slot='am';render()">Morning</button>
+        <button class="chip ${f.slot==='pm'?'active':''}" onclick="state.forms.care.slot='pm';render()">Afternoon</button>
+      </div>
+      <label class="label">Activity (optional)</label>
+      <input class="input" id="f-care-activity" value="${esc(f.activity)}" placeholder="e.g. Swimming club">
+      <div class="modal-btns">
+        ${state.modal==="editCare"?`<button class="delete-btn" onclick="deleteCareForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveCareForm()">Save</button>
+      </div>`;
   }
   return `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${inner}</div></div>`;
 }
@@ -742,6 +980,14 @@ function wireModalInputs() {
     ["f-reason", (v) => state.forms.deduct.reason = v],
     ["f-name", (v) => state.forms.profile.name = v],
     ["f-pin", (v) => state.forms.profile.pin = v.replace(/\D/g,"")],
+    ["f-event-title", (v) => state.forms.event.title = v],
+    ["f-event-date", (v) => state.forms.event.date = v],
+    ["f-event-time", (v) => state.forms.event.time = v],
+    ["f-holiday-name", (v) => state.forms.holiday.name = v],
+    ["f-holiday-start", (v) => state.forms.holiday.startDate = v],
+    ["f-holiday-end", (v) => state.forms.holiday.endDate = v],
+    ["f-care-carer", (v) => state.forms.care.carer = v],
+    ["f-care-activity", (v) => state.forms.care.activity = v],
   ];
   map.forEach(([id, setter]) => {
     const el = document.getElementById(id);
@@ -755,7 +1001,11 @@ Object.assign(window, {
   claimReward, approveRewardClaim, rejectRewardClaim, confirmDeduct, saveChoreForm, deleteChoreForm,
   saveRewardForm, deleteRewardForm, saveMemberForm, deleteMemberForm, addShoppingItem, toggleShoppingItem,
   removeShoppingItem, clearCheckedShopping, openAddChore, openEditChore, openAddReward, openEditReward,
-  openDeduct, openAddMember, openEditProfile, closeModal, toggleAssign, state, render
+  openDeduct, openAddMember, openEditProfile, closeModal, toggleAssign,
+  openAddEvent, openEditEvent, saveEventForm, deleteEventForm,
+  openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
+  openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
+  state, render
 });
 
 // ---------- boot ----------
