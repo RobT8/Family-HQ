@@ -538,9 +538,9 @@ function renderHome() {
   const tabs = isParent ? [
     ["myjobs","Overview"], ["chores","Jobs"], ["shopping","Shopping"],
     ["approve", approveCount ? `Approve (${approveCount})` : "Approve"],
-    ["rewards","Rewards"], ["scores","Scores"], ["calendar","📅"], ["settings","⚙️"]
+    ["rewards","Rewards"], ["scores","Scores"], ["events","📅 Events"], ["childcare","🏖️ Childcare"], ["settings","⚙️"]
   ] : [
-    ["myjobs","My Jobs"], ["shopping","Shopping"], ["rewards","Rewards"], ["scores","Scores"], ["calendar","📅"], ["profile","My Profile"]
+    ["myjobs","My Jobs"], ["shopping","Shopping"], ["rewards","Rewards"], ["scores","Scores"], ["events","📅 Events"], ["childcare","🏖️ Childcare"], ["profile","My Profile"]
   ];
 
   let out = `
@@ -562,7 +562,8 @@ function renderHome() {
   else if (state.tab === "approve" && isParent) out += renderApprove(pendingApprovals, pendingClaims);
   else if (state.tab === "rewards") out += renderRewards(isParent, cu);
   else if (state.tab === "scores") out += renderScores(kids);
-  else if (state.tab === "calendar") out += renderCalendar(cu, isParent);
+  else if (state.tab === "events") out += renderEvents(cu, isParent);
+  else if (state.tab === "childcare") out += renderChildcareTab(cu, isParent);
   else if (state.tab === "settings" && isParent) out += renderSettings(kids);
   else if (state.tab === "profile" && !isParent) out += renderProfile(cu);
 
@@ -764,13 +765,7 @@ function renderProfile(cu) {
   return out;
 }
 
-function renderCalendar(cu, isParent) {
-  if (state.selectedHoliday) {
-    const h = state.holidays.find(x => x.id === state.selectedHoliday);
-    if (h) return renderHolidayDetail(h, cu, isParent);
-    state.selectedHoliday = null;
-  }
-  const today = todayKey();
+function renderEvents(cu, isParent) {
   const events = state.events
     .map(ev => ({ ...ev, _next: nextOccurrence(ev) }))
     .sort((a,b) => (a._next + a.event_time).localeCompare(b._next + b.event_time));
@@ -783,8 +778,19 @@ function renderCalendar(cu, isParent) {
     out += `<div class="row" ${isParent?`onclick="openEditEvent(${ev.id})"`:""}><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${formatDateNice(ev._next)} · ${ev.event_time}${ev.recurrence?" · repeats weekly":""} · ${forMember?`${forMember.emoji} ${esc(forMember.name)}`:"👪 Family"}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
   });
   if (isParent) out += `<button class="btn-dashed" onclick="openAddEvent()">+ Add an event</button>`;
+  out += `</div>`;
+  return out;
+}
 
-  out += `<div class="mgmt-header" style="margin-top:28px;"><h3 class="section-head" style="margin:0;">🏖️ School Holidays</h3>${isParent?`<button class="btn-add" onclick="openAddHoliday()">+ Add</button>`:""}</div>`;
+function renderChildcareTab(cu, isParent) {
+  if (state.selectedHoliday) {
+    const h = state.holidays.find(x => x.id === state.selectedHoliday);
+    if (h) return renderHolidayDetail(h, cu, isParent);
+    state.selectedHoliday = null;
+  }
+  const today = todayKey();
+  let out = `<div class="content">`;
+  out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">🏖️ School Holidays</h3>${isParent?`<button class="btn-add" onclick="openAddHoliday()">+ Add</button>`:""}</div>`;
   const holidays = [...state.holidays].sort((a,b) => a.start_date.localeCompare(b.start_date));
   if (!holidays.length) out += `<p class="empty-msg">No holidays added yet</p>`;
   holidays.forEach(h => {
