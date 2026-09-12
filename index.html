@@ -258,17 +258,19 @@ async function saveRewardForm() {
 async function deleteRewardForm(id) { await sb.from("familyhq_rewards").delete().eq("id", id); showToast("Reward removed"); state.modal = null; render(); }
 async function saveMemberForm() {
   const f = state.forms.profile;
-  if (!f.name.trim()) return;
+  if (!f.name.trim()) { showToast("Name can't be empty"); return; }
+  let error;
   if (state.modal === "addMember") {
     const newId = Date.now();
-    await sb.from("familyhq_members").insert({ id: newId, name: f.name, emoji: f.emoji, pin: f.pin || "0000", role: f.role, balance: 0, total_earned: 0 });
-    showToast(`${f.name} added to the family! 🎉`);
+    ({ error } = await sb.from("familyhq_members").insert({ id: newId, name: f.name, emoji: f.emoji, pin: f.pin || "0000", role: f.role, balance: 0, total_earned: 0 }));
+    if (!error) showToast(`${f.name} added to the family! 🎉`);
   } else {
     const payload = { name: f.name, emoji: f.emoji };
     if (state.currentUser.role === "parent") { payload.pin = f.pin; payload.role = f.role; }
-    await sb.from("familyhq_members").update(payload).eq("id", state.editTarget.id);
-    showToast("Profile updated ✅");
+    ({ error } = await sb.from("familyhq_members").update(payload).eq("id", state.editTarget.id));
+    if (!error) showToast("Profile updated ✅");
   }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveMemberForm error:", error); return; }
   state.modal = null; state.editTarget = null; render();
 }
 async function deleteMemberForm(id) {
