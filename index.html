@@ -195,38 +195,46 @@ function renderToastOnly() { const t = document.getElementById("toast-holder"); 
 async function markDone(choreId) {
   const chore = state.chores.find(c => c.id === choreId);
   const period = periodFor(chore);
-  await sb.from("familyhq_chore_log").insert({ id: Date.now(), chore_id: choreId, user_id: state.currentUser.id, period, status: "pending" });
+  const { error } = await sb.from("familyhq_chore_log").insert({ id: Date.now(), chore_id: choreId, user_id: state.currentUser.id, period, status: "pending" });
+  if (error) { showToast(`Couldn't mark done: ${error.message}`); console.error("markDone error:", error); return; }
   showToast("Nice one! Waiting for approval ✋");
 }
 async function approveChore(entry) {
   const chore = state.chores.find(c => c.id === entry.chore_id);
-  await sb.from("familyhq_chore_log").update({ status: "approved" }).eq("id", entry.id);
+  const { error } = await sb.from("familyhq_chore_log").update({ status: "approved" }).eq("id", entry.id);
+  if (error) { showToast(`Approve failed: ${error.message}`); console.error("approveChore error:", error); return; }
   if (chore) {
     const m = state.members.find(m => m.id === entry.user_id);
-    await sb.from("familyhq_members").update({ balance: (m.balance||0) + chore.points, total_earned: (m.total_earned||0) + chore.points }).eq("id", entry.user_id);
+    const { error: pointsError } = await sb.from("familyhq_members").update({ balance: (m.balance||0) + chore.points, total_earned: (m.total_earned||0) + chore.points }).eq("id", entry.user_id);
+    if (pointsError) { showToast(`Points update failed: ${pointsError.message}`); console.error("approveChore points error:", pointsError); return; }
   }
   showToast(`Approved — +${chore?.points||0} pts ⭐`);
 }
 async function rejectChore(entry) {
-  await sb.from("familyhq_chore_log").update({ status: "rejected" }).eq("id", entry.id);
+  const { error } = await sb.from("familyhq_chore_log").update({ status: "rejected" }).eq("id", entry.id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("rejectChore error:", error); return; }
   showToast("Sent back");
 }
 async function claimReward(reward) {
   const avail = availableBalance(state.currentUser.id);
   if (avail >= reward.cost) {
-    await sb.from("familyhq_reward_claims").insert({ id: Date.now(), reward_id: reward.id, user_id: state.currentUser.id, status: "pending" });
+    const { error } = await sb.from("familyhq_reward_claims").insert({ id: Date.now(), reward_id: reward.id, user_id: state.currentUser.id, status: "pending" });
+    if (error) { showToast(`Claim failed: ${error.message}`); console.error("claimReward error:", error); return; }
     showToast(`Claim sent — waiting for a parent ✋`);
   } else showToast(`Need ${reward.cost - avail} more points`);
 }
 async function approveRewardClaim(claim) {
   const reward = state.rewards.find(r => r.id === claim.reward_id);
   const m = state.members.find(m => m.id === claim.user_id);
-  await sb.from("familyhq_members").update({ balance: (m.balance||0) - reward.cost }).eq("id", claim.user_id);
-  await sb.from("familyhq_reward_claims").update({ status: "approved" }).eq("id", claim.id);
+  const { error } = await sb.from("familyhq_members").update({ balance: (m.balance||0) - reward.cost }).eq("id", claim.user_id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("approveRewardClaim error:", error); return; }
+  const { error: claimError } = await sb.from("familyhq_reward_claims").update({ status: "approved" }).eq("id", claim.id);
+  if (claimError) { showToast(`Failed: ${claimError.message}`); console.error("approveRewardClaim claim error:", claimError); return; }
   showToast(`✅ Confirmed`);
 }
 async function rejectRewardClaim(claim) {
-  await sb.from("familyhq_reward_claims").update({ status: "rejected" }).eq("id", claim.id);
+  const { error } = await sb.from("familyhq_reward_claims").update({ status: "rejected" }).eq("id", claim.id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("rejectRewardClaim error:", error); return; }
   showToast("Claim declined — points held back");
 }
 async function confirmDeduct() {
@@ -234,7 +242,8 @@ async function confirmDeduct() {
   if (!f.reason.trim()) { showToast("Add a reason first"); return; }
   const m = state.members.find(m => m.id === f.childId);
   const newBal = Math.max(0, (m.balance||0) - f.amount);
-  await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
+  const { error } = await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
+  if (error) { showToast(`Deduct failed: ${error.message}`); console.error("confirmDeduct error:", error); return; }
   showToast(`${f.amount} pts deducted`);
   state.modal = null; render();
 }
@@ -243,19 +252,31 @@ async function saveChoreForm() {
   if (!f.title.trim() || f.assignedTo.length === 0) return;
   const payload = { title: f.title, points: f.points, emoji: f.emoji, assigned_to: f.assignedTo, recurring: f.recurring,
     day_of_week: f.recurring === "fortnightly" ? f.dayOfWeek : null, start_date: f.recurring === "fortnightly" ? f.startDate : null };
-  if (state.modal === "addChore") { await sb.from("familyhq_chores").insert({ id: Date.now(), ...payload }); showToast("Job added ✅"); }
-  else { await sb.from("familyhq_chores").update(payload).eq("id", state.editTarget.id); showToast("Job updated ✅"); }
+  let error;
+  if (state.modal === "addChore") { ({ error } = await sb.from("familyhq_chores").insert({ id: Date.now(), ...payload })); if (!error) showToast("Job added ✅"); }
+  else { ({ error } = await sb.from("familyhq_chores").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Job updated ✅"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveChoreForm error:", error); return; }
   state.modal = null; state.editTarget = null; render();
 }
-async function deleteChoreForm(id) { await sb.from("familyhq_chores").delete().eq("id", id); showToast("Job removed"); state.modal = null; render(); }
+async function deleteChoreForm(id) {
+  const { error } = await sb.from("familyhq_chores").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteChoreForm error:", error); return; }
+  showToast("Job removed"); state.modal = null; render();
+}
 async function saveRewardForm() {
   const f = state.forms.reward;
   if (!f.title.trim()) return;
-  if (state.modal === "addReward") { await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost: f.cost, emoji: f.emoji }); showToast("Reward added 🎁"); }
-  else { await sb.from("familyhq_rewards").update({ title: f.title, cost: f.cost, emoji: f.emoji }).eq("id", state.editTarget.id); showToast("Reward updated 🎁"); }
+  let error;
+  if (state.modal === "addReward") { ({ error } = await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost: f.cost, emoji: f.emoji })); if (!error) showToast("Reward added 🎁"); }
+  else { ({ error } = await sb.from("familyhq_rewards").update({ title: f.title, cost: f.cost, emoji: f.emoji }).eq("id", state.editTarget.id)); if (!error) showToast("Reward updated 🎁"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveRewardForm error:", error); return; }
   state.modal = null; state.editTarget = null; render();
 }
-async function deleteRewardForm(id) { await sb.from("familyhq_rewards").delete().eq("id", id); showToast("Reward removed"); state.modal = null; render(); }
+async function deleteRewardForm(id) {
+  const { error } = await sb.from("familyhq_rewards").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteRewardForm error:", error); return; }
+  showToast("Reward removed"); state.modal = null; render();
+}
 async function saveMemberForm() {
   const f = state.forms.profile;
   if (!f.name.trim()) { showToast("Name can't be empty"); return; }
@@ -277,20 +298,30 @@ async function deleteMemberForm(id) {
   if (state.members.filter(m => m.role === "parent").length <= 1 && state.members.find(m => m.id === id)?.role === "parent") {
     showToast("Can't remove the last parent"); return;
   }
-  await sb.from("familyhq_members").delete().eq("id", id);
+  const { error } = await sb.from("familyhq_members").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteMemberForm error:", error); return; }
   showToast("Member removed"); state.modal = null; render();
 }
 async function addShoppingItem() {
   const text = state.forms.shoppingInput.trim();
   if (!text) return;
-  await sb.from("familyhq_shopping_list").insert({ id: Date.now(), text, added_by: state.currentUser.id, done: false });
+  const { error } = await sb.from("familyhq_shopping_list").insert({ id: Date.now(), text, added_by: state.currentUser.id, done: false });
+  if (error) { showToast(`Add failed: ${error.message}`); console.error("addShoppingItem error:", error); return; }
   state.forms.shoppingInput = ""; render();
 }
-async function toggleShoppingItem(item) { await sb.from("familyhq_shopping_list").update({ done: !item.done }).eq("id", item.id); }
-async function removeShoppingItem(id) { await sb.from("familyhq_shopping_list").delete().eq("id", id); }
+async function toggleShoppingItem(item) {
+  const { error } = await sb.from("familyhq_shopping_list").update({ done: !item.done }).eq("id", item.id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("toggleShoppingItem error:", error); }
+}
+async function removeShoppingItem(id) {
+  const { error } = await sb.from("familyhq_shopping_list").delete().eq("id", id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("removeShoppingItem error:", error); }
+}
 async function clearCheckedShopping() {
   const ids = state.shopping.filter(i => i.done).map(i => i.id);
-  if (ids.length) await sb.from("familyhq_shopping_list").delete().in("id", ids);
+  if (!ids.length) return;
+  const { error } = await sb.from("familyhq_shopping_list").delete().in("id", ids);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("clearCheckedShopping error:", error); return; }
   showToast("Cleared checked items");
 }
 
