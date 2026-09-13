@@ -53,7 +53,6 @@
   .btn-add { padding: 6px 16px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; }
   .btn-dashed { width: 100%; padding: 14px; background: var(--primaryLight); color: var(--primary); border: 2px dashed var(--primary); border-radius: var(--radius); font-size: 14px; font-weight: 700; margin-top: 10px; }
   .empty-msg { font-size: 14px; color: var(--textMuted); text-align: center; padding: 40px; }
-  .missed-note { font-size: 13px; background: var(--accentLight); color: #92400E; padding: 10px 14px; border-radius: 10px; margin-bottom: 16px; line-height: 1.5; }
   .mgmt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .reward-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .reward-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 10px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -111,7 +110,7 @@ let state = {
     custom: { title: "", emoji: "⭐" },
     reject: { entry: null, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
-    event: { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", recurring: false },
+    event: { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", endTime: "", repeatType: "none", until: "" },
     holiday: { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true },
     care: { holidayId: null, date: null, childId: null, carer: "", activity: "", slot: "all" },
     shoppingInput: ""
@@ -124,7 +123,6 @@ const EVENT_EMOJIS = ["⭐","🎂","🏥","🦷","⚽","🎵","🎨","✂️","�
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
 function todayKey() { return new Date().toISOString().slice(0,10); }
-function yesterdayKey() { const d = new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
 function weekKey(dateObj) {
   const d = new Date(dateObj); const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff); return d.toISOString().slice(0,10);
@@ -139,11 +137,59 @@ function datesInRange(start, end) {
   while (d <= endD) { dates.push(d.toISOString().slice(0,10)); d.setDate(d.getDate() + 1); }
   return dates;
 }
+const WEEKDAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+function ordinal(n) { return n===1?"1st":n===2?"2nd":n===3?"3rd":`${n}th`; }
+function nthWeekdayInfo(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return { nth: Math.ceil(d.getDate() / 7), weekday: d.getDay() };
+}
+function nthWeekdayOfMonth(year, monthIndex, weekday, nth) {
+  const firstWeekday = new Date(year, monthIndex, 1).getDay();
+  const day = 1 + ((weekday - firstWeekday + 7) % 7) + (nth - 1) * 7;
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  return day > daysInMonth ? null : new Date(year, monthIndex, day);
+}
+function addMonthsClamped(date, n) {
+  const daysInTarget = new Date(date.getFullYear(), date.getMonth() + n + 1, 0).getDate();
+  return new Date(date.getFullYear(), date.getMonth() + n, Math.min(date.getDate(), daysInTarget));
+}
+function recurrenceLabel(rec) {
+  if (!rec || !rec.type) return "";
+  if (rec.type === "weekly") return "repeats weekly";
+  if (rec.type === "fortnightly") return "repeats fortnightly";
+  if (rec.type === "monthly") return "repeats monthly";
+  if (rec.type === "monthly-nth") return `repeats ${ordinal(rec.nth)} ${WEEKDAY_NAMES[rec.weekday]} of the month`;
+  return "";
+}
 function nextOccurrence(ev) {
-  if (!ev.recurrence || ev.recurrence.type !== "weekly") return ev.event_date;
-  let d = new Date(ev.event_date + "T00:00:00");
+  const rec = ev.recurrence;
+  if (!rec || !rec.type || rec.type === "none") return ev.event_date;
   const today = new Date(); today.setHours(0,0,0,0);
-  while (d < today) d.setDate(d.getDate() + 7);
+  const until = rec.until ? new Date(rec.until + "T00:00:00") : null;
+  const base = new Date(ev.event_date + "T00:00:00");
+  let d = base;
+
+  if (rec.type === "weekly" || rec.type === "fortnightly") {
+    const step = rec.type === "weekly" ? 7 : 14;
+    d = new Date(base);
+    while (d < today) d.setDate(d.getDate() + step);
+  } else if (rec.type === "monthly") {
+    let n = 0, candidate = base;
+    while (candidate < today && n < 1200) { n++; candidate = addMonthsClamped(base, n); }
+    d = candidate;
+  } else if (rec.type === "monthly-nth") {
+    let year = base.getFullYear(), month = base.getMonth();
+    let candidate = nthWeekdayOfMonth(year, month, rec.weekday, rec.nth);
+    let guard = 0;
+    while ((!candidate || candidate < today) && guard < 240) {
+      month++; if (month > 11) { month = 0; year++; }
+      candidate = nthWeekdayOfMonth(year, month, rec.weekday, rec.nth);
+      guard++;
+    }
+    d = candidate || base;
+  }
+
+  if (until && d > until) return null;
   return d.toISOString().slice(0,10);
 }
 function isFortnightActive(chore, refDate = new Date()) {
@@ -413,15 +459,17 @@ async function clearCheckedShopping() {
 }
 
 // ---------- calendar actions ----------
-function openAddEvent() { state.forms.event = { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", recurring: false }; state.modal = "addEvent"; render(); }
+function openAddEvent() { state.forms.event = { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", endTime: "", repeatType: "none", until: "" }; state.modal = "addEvent"; render(); }
 function openEditEvent(id) {
   const ev = state.events.find(e => e.id === id);
   if (!ev) return;
   state.editTarget = ev;
+  const rec = ev.recurrence;
   state.forms.event = {
-    title: ev.title, emoji: ev.emoji, date: ev.event_date, time: ev.event_time,
+    title: ev.title, emoji: ev.emoji, date: ev.event_date, time: ev.event_time, endTime: ev.end_time || "",
     assignedTo: ev.assigned_to && ev.assigned_to.length ? [...ev.assigned_to].map(Number) : [],
-    recurring: !!(ev.recurrence && ev.recurrence.type === "weekly")
+    repeatType: rec && rec.type ? rec.type : "none",
+    until: (rec && rec.until) || ""
   };
   state.modal = "editEvent"; render();
 }
@@ -433,10 +481,16 @@ function toggleEventAssign(id) {
 async function saveEventForm() {
   const f = state.forms.event;
   if (!f.title.trim() || !f.date) { showToast("Add a title and date"); return; }
+  let recurrence = null;
+  if (f.repeatType !== "none") {
+    recurrence = { type: f.repeatType };
+    if (f.until) recurrence.until = f.until;
+    if (f.repeatType === "monthly-nth") Object.assign(recurrence, nthWeekdayInfo(f.date));
+  }
   const payload = {
-    title: f.title, emoji: f.emoji, event_date: f.date, event_time: f.time,
+    title: f.title, emoji: f.emoji, event_date: f.date, event_time: f.time, end_time: f.endTime || null,
     assigned_to: f.assignedTo,
-    recurrence: f.recurring ? { type: "weekly" } : null
+    recurrence
   };
   let error;
   if (state.modal === "addEvent") { ({ error } = await sb.from("familyhq_events").insert({ id: Date.now(), ...payload })); if (!error) showToast("Event added 📅"); }
@@ -659,23 +713,7 @@ function renderHome() {
 }
 
 function renderOverview(kids) {
-  const missed = (() => {
-    const yDate = new Date(); yDate.setDate(yDate.getDate() - 1);
-    const yKey = yesterdayKey();
-    const daily = state.chores.filter(c => c.recurring === "daily" && isChoreDue(c, yDate));
-    const list = [];
-    daily.forEach(ch => ch.assigned_to.forEach(uid => {
-      const entry = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === uid && l.period === yKey);
-      const stillPending = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === uid && l.status === "pending");
-      if (stillPending) return;
-      if (!entry || entry.status !== "approved") list.push({ chore: ch, userId: uid });
-    }));
-    return list;
-  })();
   let out = `<div class="content">`;
-  if (missed.length) {
-    out += `<div class="missed-note"><strong>📋 Missed yesterday: </strong>${missed.map(m => { const k = state.members.find(x=>x.id===m.userId); return `${esc(k?.name)} — ${esc(m.chore.title)}`; }).join(", ")}</div>`;
-  }
   kids.forEach(kid => {
     const kidChores = state.chores.filter(c => c.assigned_to.includes(kid.id) && !c.is_custom && isChoreDue(c));
     out += `<h3 class="section-head">${kid.emoji} ${esc(kid.name)}<span style="font-size:13px;font-weight:600;color:var(--accent);margin-left:auto;">⭐ ${kid.balance} pts</span><button class="award-btn" onclick="openAward(${kid.id})">+ Add</button><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></h3>`;
@@ -695,7 +733,9 @@ function renderMyJobs(cu) {
   const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && isChoreDue(c)
       && (!c.is_custom || choreStatus(c.id, cu.id) !== "approved"))
     .sort((a, b) => statusOrder[choreStatus(a.id, cu.id)] - statusOrder[choreStatus(b.id, cu.id)]);
-  let out = `<div class="content"><h3 class="section-head">This week's jobs</h3>`;
+  let out = `<div class="content">`;
+  out += `<button class="btn-dashed" style="margin-top:0;" onclick="openSubmitCustomJob()">+ Submit something you did</button>`;
+  out += `<h3 class="section-head" style="margin-top:20px;">This week's jobs</h3>`;
   if (!myChores.length) out += `<p class="empty-msg">No jobs due right now 🎉</p>`;
   myChores.forEach(ch => {
     const status = choreStatus(ch.id, cu.id);
@@ -712,7 +752,6 @@ function renderMyJobs(cu) {
     else if (status === "rejected") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Redo ↩️</button>`;
     out += `</div>`;
   });
-  out += `<button class="btn-dashed" onclick="openSubmitCustomJob()">+ Submit something you did</button>`;
   out += `</div>`;
   return out;
 }
@@ -875,6 +914,7 @@ function renderProfile(cu) {
 function renderEvents(cu, isParent) {
   const events = state.events
     .map(ev => ({ ...ev, _next: nextOccurrence(ev) }))
+    .filter(ev => ev._next !== null)
     .sort((a,b) => (a._next + a.event_time).localeCompare(b._next + b.event_time));
 
   let out = `<div class="content">`;
@@ -883,7 +923,9 @@ function renderEvents(cu, isParent) {
   events.forEach(ev => {
     const forMembers = (ev.assigned_to || []).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
     const forLabel = forMembers.length ? forMembers.map(m => `${m.emoji} ${esc(m.name)}`).join(", ") : "👪 Family";
-    out += `<div class="row" ${isParent?`onclick="openEditEvent(${ev.id})"`:""}><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${formatDateNice(ev._next)} · ${ev.event_time}${ev.recurrence?" · repeats weekly":""} · ${forLabel}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
+    const timeLabel = ev.end_time ? `${ev.event_time}–${ev.end_time}` : ev.event_time;
+    const recLabel = recurrenceLabel(ev.recurrence);
+    out += `<div class="row" ${isParent?`onclick="openEditEvent(${ev.id})"`:""}><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${formatDateNice(ev._next)} · ${timeLabel}${recLabel?` · ${recLabel}`:""} · ${forLabel}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
   });
   if (isParent) out += `<button class="btn-dashed" onclick="openAddEvent()">+ Add an event</button>`;
   out += `</div>`;
@@ -1074,11 +1116,23 @@ function renderModal() {
       <input class="input" type="date" id="f-event-date" value="${f.date}">
       <label class="label">Time</label>
       <input class="input" type="time" id="f-event-time" value="${f.time}">
+      <label class="label">End time (optional)</label>
+      <input class="input" type="time" id="f-event-endtime" value="${f.endTime}">
       <label class="label">Who's this for?</label>
       <div class="chip-row">${state.members.map(m=>`<button class="chip ${f.assignedTo.includes(m.id)?'active':''}" onclick="toggleEventAssign(${m.id})">${m.emoji} ${esc(m.name)}</button>`).join("")}</div>
       <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">Pick as many people as you like — leave everyone unselected for a whole-family event.</p>
       <label class="label">Repeats</label>
-      <div class="chip-row"><button class="chip ${f.recurring?'active':''}" onclick="state.forms.event.recurring=!state.forms.event.recurring;render()">🔁 Weekly</button></div>
+      <div class="chip-row">
+        <button class="chip ${f.repeatType==='none'?'active':''}" onclick="state.forms.event.repeatType='none';render()">Never</button>
+        <button class="chip ${f.repeatType==='weekly'?'active':''}" onclick="state.forms.event.repeatType='weekly';render()">Weekly</button>
+        <button class="chip ${f.repeatType==='fortnightly'?'active':''}" onclick="state.forms.event.repeatType='fortnightly';render()">Fortnightly</button>
+        <button class="chip ${f.repeatType==='monthly'?'active':''}" onclick="state.forms.event.repeatType='monthly';render()">Monthly</button>
+        <button class="chip ${f.repeatType==='monthly-nth'?'active':''}" onclick="state.forms.event.repeatType='monthly-nth';render()">${ordinal(nthWeekdayInfo(f.date).nth)} ${WEEKDAY_NAMES[nthWeekdayInfo(f.date).weekday]} of month</button>
+      </div>
+      ${f.repeatType !== "none" ? `
+        <label class="label">Repeat until (optional)</label>
+        <input class="input" type="date" id="f-event-until" value="${f.until}">
+      ` : ""}
       <div class="modal-btns">
         ${state.modal==="editEvent"?`<button class="delete-btn" onclick="deleteEventForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
         <div style="flex:1;"></div>
@@ -1150,6 +1204,8 @@ function wireModalInputs() {
     ["f-event-title", (v) => state.forms.event.title = v],
     ["f-event-date", (v) => state.forms.event.date = v],
     ["f-event-time", (v) => state.forms.event.time = v],
+    ["f-event-endtime", (v) => state.forms.event.endTime = v],
+    ["f-event-until", (v) => state.forms.event.until = v],
     ["f-holiday-name", (v) => state.forms.holiday.name = v],
     ["f-holiday-start", (v) => state.forms.holiday.startDate = v],
     ["f-holiday-end", (v) => state.forms.holiday.endDate = v],
