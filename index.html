@@ -255,6 +255,7 @@ async function markDone(choreId) {
   const period = periodFor(chore);
   const { error } = await sb.from("familyhq_chore_log").insert({ id: Date.now(), chore_id: choreId, user_id: state.currentUser.id, period, status: "pending" });
   if (error) { showToast(`Couldn't mark done: ${error.message}`); console.error("markDone error:", error); return; }
+  await fetchAll();
   showToast("Nice one! Waiting for approval ✋");
 }
 async function approveChore(entry) {
@@ -266,11 +267,13 @@ async function approveChore(entry) {
     const { error: pointsError } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + chore.points, total_earned: (base.total_earned||0) + chore.points }).eq("id", entry.user_id);
     if (pointsError) { showToast(`Points update failed: ${pointsError.message}`); console.error("approveChore points error:", pointsError); return; }
   }
+  await fetchAll();
   showToast(`Approved — +${chore?.points||0} pts ⭐`);
 }
 async function rejectChore(entry, reason) {
   const { error } = await sb.from("familyhq_chore_log").update({ status: "rejected", reject_reason: reason || null }).eq("id", entry.id);
   if (error) { showToast(`Failed: ${error.message}`); console.error("rejectChore error:", error); return; }
+  await fetchAll();
   showToast("Sent back");
 }
 function openRejectChore(entry) { state.forms.reject = { entry, reason: "" }; state.modal = "rejectChore"; render(); }
@@ -279,12 +282,14 @@ async function confirmRejectChore() {
   if (!f.reason.trim()) { showToast("Add a reason first"); return; }
   await rejectChore(f.entry, f.reason);
   state.modal = null; render();
+  // rejectChore already refreshed state via fetchAll(); this just closes the modal.
 }
 async function claimReward(reward) {
   const avail = availableBalance(state.currentUser.id);
   if (avail >= reward.cost) {
     const { error } = await sb.from("familyhq_reward_claims").insert({ id: Date.now(), reward_id: reward.id, user_id: state.currentUser.id, status: "pending" });
     if (error) { showToast(`Claim failed: ${error.message}`); console.error("claimReward error:", error); return; }
+    await fetchAll();
     showToast(`Claim sent — waiting for a parent ✋`);
   } else showToast(`Need ${reward.cost - avail} more points`);
 }
@@ -295,11 +300,13 @@ async function approveRewardClaim(claim) {
   if (error) { showToast(`Failed: ${error.message}`); console.error("approveRewardClaim error:", error); return; }
   const { error: claimError } = await sb.from("familyhq_reward_claims").update({ status: "approved" }).eq("id", claim.id);
   if (claimError) { showToast(`Failed: ${claimError.message}`); console.error("approveRewardClaim claim error:", claimError); return; }
+  await fetchAll();
   showToast(`✅ Confirmed`);
 }
 async function rejectRewardClaim(claim) {
   const { error } = await sb.from("familyhq_reward_claims").update({ status: "rejected" }).eq("id", claim.id);
   if (error) { showToast(`Failed: ${error.message}`); console.error("rejectRewardClaim error:", error); return; }
+  await fetchAll();
   showToast("Claim declined — points held back");
 }
 async function confirmDeduct() {
@@ -310,7 +317,7 @@ async function confirmDeduct() {
   const { error } = await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
   if (error) { showToast(`Deduct failed: ${error.message}`); console.error("confirmDeduct error:", error); return; }
   showToast(`${f.amount} pts deducted`);
-  state.modal = null; render();
+  state.modal = null; await fetchAll();
 }
 async function confirmAward() {
   const f = state.forms.award;
@@ -319,7 +326,7 @@ async function confirmAward() {
   const { error } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + f.amount, total_earned: (base.total_earned||0) + f.amount }).eq("id", f.childId);
   if (error) { showToast(`Award failed: ${error.message}`); console.error("confirmAward error:", error); return; }
   showToast(`+${f.amount} pts awarded ⭐`);
-  state.modal = null; render();
+  state.modal = null; await fetchAll();
 }
 async function saveChoreForm() {
   const f = state.forms.chore;
@@ -332,12 +339,12 @@ async function saveChoreForm() {
   if (state.modal === "addChore") { ({ error } = await sb.from("familyhq_chores").insert({ id: Date.now(), ...payload })); if (!error) showToast("Job added ✅"); }
   else { ({ error } = await sb.from("familyhq_chores").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Job updated ✅"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveChoreForm error:", error); return; }
-  state.modal = null; state.editTarget = null; render();
+  state.modal = null; state.editTarget = null; await fetchAll();
 }
 async function deleteChoreForm(id) {
   const { error } = await sb.from("familyhq_chores").delete().eq("id", id);
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteChoreForm error:", error); return; }
-  showToast("Job removed"); state.modal = null; render();
+  showToast("Job removed"); state.modal = null; await fetchAll();
 }
 async function saveRewardForm() {
   const f = state.forms.reward;
@@ -346,12 +353,12 @@ async function saveRewardForm() {
   if (state.modal === "addReward") { ({ error } = await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost: f.cost, emoji: f.emoji })); if (!error) showToast("Reward added 🎁"); }
   else { ({ error } = await sb.from("familyhq_rewards").update({ title: f.title, cost: f.cost, emoji: f.emoji }).eq("id", state.editTarget.id)); if (!error) showToast("Reward updated 🎁"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveRewardForm error:", error); return; }
-  state.modal = null; state.editTarget = null; render();
+  state.modal = null; state.editTarget = null; await fetchAll();
 }
 async function deleteRewardForm(id) {
   const { error } = await sb.from("familyhq_rewards").delete().eq("id", id);
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteRewardForm error:", error); return; }
-  showToast("Reward removed"); state.modal = null; render();
+  showToast("Reward removed"); state.modal = null; await fetchAll();
 }
 async function saveMemberForm() {
   const f = state.forms.profile;
@@ -368,7 +375,7 @@ async function saveMemberForm() {
     if (!error) showToast("Profile updated ✅");
   }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveMemberForm error:", error); return; }
-  state.modal = null; state.editTarget = null; render();
+  state.modal = null; state.editTarget = null; await fetchAll();
 }
 async function deleteMemberForm(id) {
   if (state.members.filter(m => m.role === "parent").length <= 1 && state.members.find(m => m.id === id)?.role === "parent") {
@@ -376,28 +383,31 @@ async function deleteMemberForm(id) {
   }
   const { error } = await sb.from("familyhq_members").delete().eq("id", id);
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteMemberForm error:", error); return; }
-  showToast("Member removed"); state.modal = null; render();
+  showToast("Member removed"); state.modal = null; await fetchAll();
 }
 async function addShoppingItem() {
   const text = state.forms.shoppingInput.trim();
   if (!text) return;
   const { error } = await sb.from("familyhq_shopping_list").insert({ id: Date.now(), text, added_by: state.currentUser.id, done: false });
   if (error) { showToast(`Add failed: ${error.message}`); console.error("addShoppingItem error:", error); return; }
-  state.forms.shoppingInput = ""; render();
+  state.forms.shoppingInput = ""; await fetchAll();
 }
 async function toggleShoppingItem(item) {
   const { error } = await sb.from("familyhq_shopping_list").update({ done: !item.done }).eq("id", item.id);
-  if (error) { showToast(`Failed: ${error.message}`); console.error("toggleShoppingItem error:", error); }
+  if (error) { showToast(`Failed: ${error.message}`); console.error("toggleShoppingItem error:", error); return; }
+  await fetchAll();
 }
 async function removeShoppingItem(id) {
   const { error } = await sb.from("familyhq_shopping_list").delete().eq("id", id);
-  if (error) { showToast(`Failed: ${error.message}`); console.error("removeShoppingItem error:", error); }
+  if (error) { showToast(`Failed: ${error.message}`); console.error("removeShoppingItem error:", error); return; }
+  await fetchAll();
 }
 async function clearCheckedShopping() {
   const ids = state.shopping.filter(i => i.done).map(i => i.id);
   if (!ids.length) return;
   const { error } = await sb.from("familyhq_shopping_list").delete().in("id", ids);
   if (error) { showToast(`Failed: ${error.message}`); console.error("clearCheckedShopping error:", error); return; }
+  await fetchAll();
   showToast("Cleared checked items");
 }
 
@@ -429,12 +439,12 @@ async function saveEventForm() {
   if (state.modal === "addEvent") { ({ error } = await sb.from("familyhq_events").insert({ id: Date.now(), ...payload })); if (!error) showToast("Event added 📅"); }
   else { ({ error } = await sb.from("familyhq_events").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Event updated 📅"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveEventForm error:", error); return; }
-  state.modal = null; state.editTarget = null; render();
+  state.modal = null; state.editTarget = null; await fetchAll();
 }
 async function deleteEventForm(id) {
   const { error } = await sb.from("familyhq_events").delete().eq("id", id);
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteEventForm error:", error); return; }
-  showToast("Event removed"); state.modal = null; render();
+  showToast("Event removed"); state.modal = null; await fetchAll();
 }
 function openAddHoliday() { state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey() }; state.modal = "addHoliday"; render(); }
 function openEditHoliday(id) {
@@ -453,13 +463,13 @@ async function saveHolidayForm() {
   if (state.modal === "addHoliday") { ({ error } = await sb.from("familyhq_holidays").insert({ id: Date.now(), ...payload })); if (!error) showToast("Holiday added 🏖️"); }
   else { ({ error } = await sb.from("familyhq_holidays").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Holiday updated 🏖️"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveHolidayForm error:", error); return; }
-  state.modal = null; state.editTarget = null; render();
+  state.modal = null; state.editTarget = null; await fetchAll();
 }
 async function deleteHolidayForm(id) {
   const { error } = await sb.from("familyhq_holidays").delete().eq("id", id);
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteHolidayForm error:", error); return; }
   await sb.from("familyhq_childcare").delete().eq("holiday_id", id);
-  showToast("Holiday removed"); state.modal = null; state.selectedHoliday = null; render();
+  showToast("Holiday removed"); state.modal = null; state.selectedHoliday = null; await fetchAll();
 }
 function openAddCare(holidayId, date, childId = null) { state.forms.care = { holidayId, date, childId, carer: "", activity: "", slot: "all" }; state.modal = "addCare"; render(); }
 async function toggleChildcareInclusion(id) {
@@ -487,12 +497,12 @@ async function saveCareForm() {
   if (state.modal === "addCare") { ({ error } = await sb.from("familyhq_childcare").insert({ id: Date.now(), ...payload })); if (!error) showToast("Care added ✅"); }
   else { ({ error } = await sb.from("familyhq_childcare").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Care updated ✅"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveCareForm error:", error); return; }
-  state.modal = null; state.editTarget = null; render();
+  state.modal = null; state.editTarget = null; await fetchAll();
 }
 async function deleteCareForm(id) {
   const { error } = await sb.from("familyhq_childcare").delete().eq("id", id);
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteCareForm error:", error); return; }
-  showToast("Care entry removed"); state.modal = null; render();
+  showToast("Care entry removed"); state.modal = null; await fetchAll();
 }
 function selectHoliday(id) { state.selectedHoliday = id; render(); }
 function backToHolidays() { state.selectedHoliday = null; render(); }
@@ -527,7 +537,7 @@ async function submitCustomJob() {
   const { error: logErr } = await sb.from("familyhq_chore_log").insert({ id: Date.now() + 1, chore_id: choreId, user_id: state.currentUser.id, period: todayKey(), status: "pending" });
   if (logErr) { showToast(`Failed: ${logErr.message}`); console.error("submitCustomJob log error:", logErr); return; }
   showToast("Sent for approval! ✋");
-  state.modal = null; render();
+  state.modal = null; await fetchAll();
 }
 async function approveCustomChore(entry, points) {
   const { error } = await sb.from("familyhq_chores").update({ points }).eq("id", entry.chore_id);
