@@ -103,7 +103,7 @@ let state = {
   currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
-    chore: { title: "", points: 5, emoji: "⭐", assignedTo: [], recurring: "daily", dayOfWeek: "Sun", startDate: todayKey() },
+    chore: { title: "", points: 5, emoji: "⭐", assignedTo: [], recurring: "daily", dayOfWeek: "Sun", startDate: todayKey(), skipWeekends: false, skipHolidays: false },
     reward: { title: "", cost: 30, emoji: "🎁" },
     deduct: { childId: null, amount: 5, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
@@ -150,7 +150,16 @@ function isFortnightActive(chore, refDate = new Date()) {
   if (diffWeeks < 0) return false;
   return diffWeeks % 2 === 0;
 }
-function isChoreDue(chore) { return chore.recurring !== "fortnightly" || isFortnightActive(chore); }
+function isHolidayOn(refDate = new Date()) {
+  const key = refDate.toISOString().slice(0,10);
+  return state.holidays.some(h => key >= h.start_date && key <= h.end_date);
+}
+function isChoreDue(chore, refDate = new Date()) {
+  if (chore.recurring === "fortnightly" && !isFortnightActive(chore, refDate)) return false;
+  if (chore.skip_weekends) { const day = refDate.getDay(); if (day === 0 || day === 6) return false; }
+  if (chore.skip_holidays && isHolidayOn(refDate)) return false;
+  return true;
+}
 function periodFor(chore) {
   if (chore.recurring === "weekly") return weekKey(new Date());
   if (chore.recurring === "fortnightly") return isFortnightActive(chore) ? weekKey(new Date()) : null;
@@ -282,7 +291,9 @@ async function saveChoreForm() {
   const f = state.forms.chore;
   if (!f.title.trim() || f.assignedTo.length === 0) return;
   const payload = { title: f.title, points: f.points, emoji: f.emoji, assigned_to: f.assignedTo, recurring: f.recurring,
-    day_of_week: f.recurring === "fortnightly" ? f.dayOfWeek : null, start_date: f.recurring === "fortnightly" ? f.startDate : null };
+    day_of_week: f.recurring === "fortnightly" ? f.dayOfWeek : null, start_date: f.recurring === "fortnightly" ? f.startDate : null,
+    skip_weekends: f.recurring !== "one-off" ? f.skipWeekends : false,
+    skip_holidays: f.recurring !== "one-off" ? f.skipHolidays : false };
   let error;
   if (state.modal === "addChore") { ({ error } = await sb.from("familyhq_chores").insert({ id: Date.now(), ...payload })); if (!error) showToast("Job added ✅"); }
   else { ({ error } = await sb.from("familyhq_chores").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Job updated ✅"); }
@@ -416,7 +427,16 @@ async function deleteHolidayForm(id) {
   await sb.from("familyhq_childcare").delete().eq("holiday_id", id);
   showToast("Holiday removed"); state.modal = null; state.selectedHoliday = null; render();
 }
-function openAddCare(holidayId, date) { state.forms.care = { holidayId, date, childId: null, carer: "", activity: "", slot: "all" }; state.modal = "addCare"; render(); }
+function openAddCare(holidayId, date, childId = null) { state.forms.care = { holidayId, date, childId, carer: "", activity: "", slot: "all" }; state.modal = "addCare"; render(); }
+async function toggleChildcareInclusion(id) {
+  const m = state.members.find(x => x.id === id);
+  if (!m) return;
+  const newVal = !(m.include_in_childcare !== false);
+  const { error } = await sb.from("familyhq_members").update({ include_in_childcare: newVal }).eq("id", id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("toggleChildcareInclusion error:", error); return; }
+  m.include_in_childcare = newVal;
+  render();
+}
 function openEditCare(id) {
   const c = state.childcare.find(x => x.id === id);
   if (!c) return;
@@ -457,8 +477,8 @@ function handlePinSubmit() {
 }
 function handleLogout() { state.currentUser = null; state.screen = "login"; state.pinTarget = null; state.pinInput = ""; state.tab = "myjobs"; render(); }
 
-function openAddChore() { state.forms.chore = { title:"", points:5, emoji:"⭐", assignedTo:[], recurring:"daily", dayOfWeek:"Sun", startDate: todayKey() }; state.modal = "addChore"; render(); }
-function openEditChore(id) { const ch = state.chores.find(c => c.id === id); if (!ch) return; state.editTarget = ch; state.forms.chore = { title: ch.title, points: ch.points, emoji: ch.emoji, assignedTo: [...ch.assigned_to], recurring: ch.recurring, dayOfWeek: ch.day_of_week || "Sun", startDate: ch.start_date || todayKey() }; state.modal = "editChore"; render(); }
+function openAddChore() { state.forms.chore = { title:"", points:5, emoji:"⭐", assignedTo:[], recurring:"daily", dayOfWeek:"Sun", startDate: todayKey(), skipWeekends: false, skipHolidays: false }; state.modal = "addChore"; render(); }
+function openEditChore(id) { const ch = state.chores.find(c => c.id === id); if (!ch) return; state.editTarget = ch; state.forms.chore = { title: ch.title, points: ch.points, emoji: ch.emoji, assignedTo: [...ch.assigned_to], recurring: ch.recurring, dayOfWeek: ch.day_of_week || "Sun", startDate: ch.start_date || todayKey(), skipWeekends: !!ch.skip_weekends, skipHolidays: !!ch.skip_holidays }; state.modal = "editChore"; render(); }
 function openAddReward() { state.forms.reward = { title:"", cost:30, emoji:"🎁" }; state.modal = "addReward"; render(); }
 function openEditReward(id) { const r = state.rewards.find(x => x.id === id); if (!r) return; state.editTarget = r; state.forms.reward = { title: r.title, cost: r.cost, emoji: r.emoji }; state.modal = "editReward"; render(); }
 function openDeduct(childId) { state.forms.deduct = { childId, amount: 5, reason: "" }; state.modal = "deduct"; render(); }
@@ -573,8 +593,9 @@ function renderHome() {
 
 function renderOverview(kids) {
   const missed = (() => {
+    const yDate = new Date(); yDate.setDate(yDate.getDate() - 1);
     const yKey = yesterdayKey();
-    const daily = state.chores.filter(c => c.recurring === "daily");
+    const daily = state.chores.filter(c => c.recurring === "daily" && isChoreDue(c, yDate));
     const list = [];
     daily.forEach(ch => ch.assigned_to.forEach(uid => {
       const entry = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === uid && l.period === yKey);
@@ -790,6 +811,12 @@ function renderChildcareTab(cu, isParent) {
   }
   const today = todayKey();
   let out = `<div class="content">`;
+  if (isParent) {
+    const kids = state.members.filter(m => m.role === "child");
+    out += `<h3 class="section-head">Included Children</h3>
+      <div class="chip-row" style="margin-bottom:20px;">${kids.map(k=>`<button class="chip ${k.include_in_childcare!==false?'active':''}" onclick="toggleChildcareInclusion(${k.id})">${k.emoji} ${esc(k.name)}</button>`).join("")}</div>
+      <p style="font-size:12px;color:var(--textMuted);margin-top:-14px;margin-bottom:20px;">Only ticked children show up in the holiday rota below.</p>`;
+  }
   out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">🏖️ School Holidays</h3>${isParent?`<button class="btn-add" onclick="openAddHoliday()">+ Add</button>`:""}</div>`;
   const holidays = [...state.holidays].sort((a,b) => a.start_date.localeCompare(b.start_date));
   if (!holidays.length) out += `<p class="empty-msg">No holidays added yet</p>`;
@@ -804,22 +831,27 @@ function renderChildcareTab(cu, isParent) {
 
 function renderHolidayDetail(h, cu, isParent) {
   const dates = datesInRange(h.start_date, h.end_date);
+  const includedKids = state.members.filter(m => m.role === "child" && m.include_in_childcare !== false);
   let out = `<div class="content">
     <button class="back-link" style="margin:0 0 12px;padding:0;" onclick="backToHolidays()">← All holidays</button>
     <div class="mgmt-header"><h3 class="section-head" style="margin:0;">🏖️ ${esc(h.name)}</h3>${isParent?`<button class="btn-add" onclick="openEditHoliday(${h.id})">✏️ Edit</button>`:""}</div>
     <p style="font-size:13px;color:var(--textMuted);margin-top:-8px;margin-bottom:16px;">${formatDateNice(h.start_date)} – ${formatDateNice(h.end_date)}</p>`;
 
   dates.forEach(date => {
-    const rows = state.childcare.filter(c => c.holiday_id === h.id && c.care_date === date && (isParent || c.child_id === cu.id));
-    if (!isParent && !rows.length) return;
+    const kidsForDate = isParent ? includedKids : includedKids.filter(k => k.id === cu.id);
+    if (!kidsForDate.length) return;
     out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin:14px 0 6px;">${formatDateNice(date)}</h4>`;
-    if (!rows.length) out += `<p style="font-size:13px;color:var(--textMuted);margin:0 0 6px;">Nothing arranged yet</p>`;
-    rows.forEach(c => {
-      const kid = state.members.find(m => m.id === c.child_id);
-      const slotLabel = c.slot === "am" ? "Morning" : c.slot === "pm" ? "Afternoon" : "All day";
-      out += `<div class="row" ${isParent?`onclick="openEditCare(${c.id})"`:""}><span style="font-size:20px;">${kid?.emoji||"🧒"}</span><div class="row-info"><span class="row-title">${esc(kid?.name||"?")} · ${esc(c.carer)}</span><span class="row-meta">${slotLabel}${c.activity?` · ${esc(c.activity)}`:""}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
+    kidsForDate.forEach(kid => {
+      const c = state.childcare.find(x => x.holiday_id === h.id && x.care_date === date && x.child_id === kid.id);
+      if (c) {
+        const slotLabel = c.slot === "am" ? "Morning" : c.slot === "pm" ? "Afternoon" : "All day";
+        out += `<div class="row" ${isParent?`onclick="openEditCare(${c.id})"`:""}><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)} · ${esc(c.carer)}</span><span class="row-meta">${slotLabel}${c.activity?` · ${esc(c.activity)}`:""}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
+      } else if (isParent) {
+        out += `<div class="row" style="cursor:pointer;" onclick="openAddCare(${h.id},'${date}',${kid.id})"><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)}</span><span class="row-meta" style="color:var(--accent);">Not arranged — tap to add</span></div><span style="font-size:14px;color:var(--textMuted);">+</span></div>`;
+      } else {
+        out += `<div class="row"><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)}</span><span class="row-meta">Not arranged yet</span></div></div>`;
+      }
     });
-    if (isParent) out += `<button class="chip" style="width:100%;text-align:center;margin-bottom:4px;" onclick="openAddCare(${h.id},'${date}')">+ Add for this day</button>`;
   });
   out += `</div>`;
   return out;
@@ -847,6 +879,13 @@ function renderModal() {
         <label class="label">First due date</label>
         <input class="input" type="date" id="f-startdate" value="${f.startDate}">
         <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">To alternate two fortnightly jobs (like black bin / green bin), give them start dates one week apart.</p>
+      ` : ""}
+      ${f.recurring !== "one-off" ? `
+        <label class="label">Skip on</label>
+        <div class="chip-row">
+          <button class="chip ${f.skipWeekends?'active':''}" onclick="state.forms.chore.skipWeekends=!state.forms.chore.skipWeekends;render()">🚫 Weekends</button>
+          <button class="chip ${f.skipHolidays?'active':''}" onclick="state.forms.chore.skipHolidays=!state.forms.chore.skipHolidays;render()">🚫 School holidays</button>
+        </div>
       ` : ""}
       <label class="label">Assign to</label>
       <div class="chip-row">${state.members.map(m=>`<button class="chip ${f.assignedTo.includes(m.id)?'active':''}" onclick="toggleAssign(${m.id})">${m.emoji} ${esc(m.name)}</button>`).join("")}</div>
@@ -1011,6 +1050,7 @@ Object.assign(window, {
   openAddEvent, openEditEvent, saveEventForm, deleteEventForm,
   openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
+  toggleChildcareInclusion,
   state, render
 });
 
