@@ -105,7 +105,7 @@ let state = {
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
     chore: { title: "", points: 5, emoji: "⭐", assignedTo: [], recurring: "daily", dayOfWeek: "Sun", startDate: todayKey(), skipWeekends: false, skipHolidays: false },
-    reward: { title: "", cost: 30, emoji: "🎁" },
+    reward: { title: "", cost: 20, emoji: "🎁" },
     deduct: { childId: null, amount: 5, reason: "" },
     award: { childId: null, amount: 5, reason: "" },
     custom: { title: "", emoji: "⭐" },
@@ -349,9 +349,10 @@ async function deleteChoreForm(id) {
 async function saveRewardForm() {
   const f = state.forms.reward;
   if (!f.title.trim()) return;
+  const cost = Math.min(1000, Math.max(20, Math.round((f.cost || 20) / 20) * 20));
   let error;
-  if (state.modal === "addReward") { ({ error } = await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost: f.cost, emoji: f.emoji })); if (!error) showToast("Reward added 🎁"); }
-  else { ({ error } = await sb.from("familyhq_rewards").update({ title: f.title, cost: f.cost, emoji: f.emoji }).eq("id", state.editTarget.id)); if (!error) showToast("Reward updated 🎁"); }
+  if (state.modal === "addReward") { ({ error } = await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost, emoji: f.emoji })); if (!error) showToast("Reward added 🎁"); }
+  else { ({ error } = await sb.from("familyhq_rewards").update({ title: f.title, cost, emoji: f.emoji }).eq("id", state.editTarget.id)); if (!error) showToast("Reward updated 🎁"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("saveRewardForm error:", error); return; }
   state.modal = null; state.editTarget = null; await fetchAll();
 }
@@ -523,7 +524,7 @@ function handleLogout() { state.currentUser = null; state.screen = "login"; stat
 
 function openAddChore() { state.forms.chore = { title:"", points:5, emoji:"⭐", assignedTo:[], recurring:"daily", dayOfWeek:"Sun", startDate: todayKey(), skipWeekends: false, skipHolidays: false }; state.modal = "addChore"; render(); }
 function openEditChore(id) { const ch = state.chores.find(c => c.id === id); if (!ch) return; state.editTarget = ch; state.forms.chore = { title: ch.title, points: ch.points, emoji: ch.emoji, assignedTo: [...ch.assigned_to], recurring: ch.recurring, dayOfWeek: ch.day_of_week || "Sun", startDate: ch.start_date || todayKey(), skipWeekends: !!ch.skip_weekends, skipHolidays: !!ch.skip_holidays }; state.modal = "editChore"; render(); }
-function openAddReward() { state.forms.reward = { title:"", cost:30, emoji:"🎁" }; state.modal = "addReward"; render(); }
+function openAddReward() { state.forms.reward = { title:"", cost:20, emoji:"🎁" }; state.modal = "addReward"; render(); }
 function openEditReward(id) { const r = state.rewards.find(x => x.id === id); if (!r) return; state.editTarget = r; state.forms.reward = { title: r.title, cost: r.cost, emoji: r.emoji }; state.modal = "editReward"; render(); }
 function openDeduct(childId) { state.forms.deduct = { childId, amount: 5, reason: "" }; state.modal = "deduct"; render(); }
 function openAward(childId) { state.forms.award = { childId, amount: 5, reason: "" }; state.modal = "award"; render(); }
@@ -987,7 +988,13 @@ function renderModal() {
       <label class="label">Icon</label>
       <div class="emoji-row">${REWARD_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.reward.emoji='${em}';render()">${em}</button>`).join("")}</div>
       <label class="label">Cost (points)</label>
-      <div class="chip-row">${[10,20,30,40,50,60,80,100].map(p=>`<button class="chip ${f.cost===p?'active':''}" onclick="state.forms.reward.cost=${p};render()">${p}</button>`).join("")}</div>
+      <div class="chip-row">${[20,60,100,200,500,1000].map(p=>`<button class="chip ${f.cost===p?'active':''}" onclick="state.forms.reward.cost=${p};render()">${p}</button>`).join("")}</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+        <button class="emoji-btn" style="width:40px;height:40px;font-size:20px;" onclick="state.forms.reward.cost=Math.max(20,(state.forms.reward.cost||0)-20);render()">−</button>
+        <input class="input" type="number" id="f-reward-cost" style="text-align:center;font-weight:700;" min="20" max="1000" step="20" value="${f.cost}">
+        <button class="emoji-btn" style="width:40px;height:40px;font-size:20px;" onclick="state.forms.reward.cost=Math.min(1000,(state.forms.reward.cost||0)+20);render()">+</button>
+      </div>
+      <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">Any multiple of 20, up to 1000.</p>
       <div class="modal-btns">
         ${state.modal==="editReward"?`<button class="delete-btn" onclick="deleteRewardForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
         <div style="flex:1;"></div>
@@ -1138,6 +1145,7 @@ function wireModalInputs() {
     ["f-reason", (v) => state.forms.deduct.reason = v],
     ["f-award-reason", (v) => state.forms.award.reason = v],
     ["f-custom-title", (v) => state.forms.custom.title = v],
+    ["f-reward-cost", (v) => state.forms.reward.cost = parseInt(v, 10) || 0],
     ["f-reject-reason", (v) => state.forms.reject.reason = v],
     ["f-name", (v) => state.forms.profile.name = v],
     ["f-pin", (v) => state.forms.profile.pin = v.replace(/\D/g,"")],
