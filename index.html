@@ -111,7 +111,7 @@ let state = {
     custom: { title: "", emoji: "⭐" },
     reject: { entry: null, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
-    event: { title: "", emoji: "⭐", forType: "family", forId: null, date: todayKey(), time: "16:00", recurring: false },
+    event: { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", recurring: false },
     holiday: { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true },
     care: { holidayId: null, date: null, childId: null, carer: "", activity: "", slot: "all" },
     shoppingInput: ""
@@ -413,27 +413,29 @@ async function clearCheckedShopping() {
 }
 
 // ---------- calendar actions ----------
-function openAddEvent() { state.forms.event = { title: "", emoji: "⭐", forType: "family", forId: null, date: todayKey(), time: "16:00", recurring: false }; state.modal = "addEvent"; render(); }
+function openAddEvent() { state.forms.event = { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", recurring: false }; state.modal = "addEvent"; render(); }
 function openEditEvent(id) {
   const ev = state.events.find(e => e.id === id);
   if (!ev) return;
   state.editTarget = ev;
   state.forms.event = {
     title: ev.title, emoji: ev.emoji, date: ev.event_date, time: ev.event_time,
-    forType: ev.child_id ? "child" : ev.parent_id ? "parent" : "family",
-    forId: ev.child_id || ev.parent_id || null,
+    assignedTo: ev.assigned_to && ev.assigned_to.length ? [...ev.assigned_to].map(Number) : [],
     recurring: !!(ev.recurrence && ev.recurrence.type === "weekly")
   };
   state.modal = "editEvent"; render();
 }
+function toggleEventAssign(id) {
+  const f = state.forms.event;
+  f.assignedTo = f.assignedTo.includes(id) ? f.assignedTo.filter(x => x !== id) : [...f.assignedTo, id];
+  render();
+}
 async function saveEventForm() {
   const f = state.forms.event;
   if (!f.title.trim() || !f.date) { showToast("Add a title and date"); return; }
-  if (f.forType !== "family" && !f.forId) { showToast("Pick who this is for"); return; }
   const payload = {
     title: f.title, emoji: f.emoji, event_date: f.date, event_time: f.time,
-    child_id: f.forType === "child" ? f.forId : null,
-    parent_id: f.forType === "parent" ? f.forId : null,
+    assigned_to: f.assignedTo,
     recurrence: f.recurring ? { type: "weekly" } : null
   };
   let error;
@@ -879,8 +881,9 @@ function renderEvents(cu, isParent) {
   out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">📅 Upcoming Events</h3>${isParent?`<button class="btn-add" onclick="openAddEvent()">+ Add</button>`:""}</div>`;
   if (!events.length) out += `<p class="empty-msg">No events yet</p>`;
   events.forEach(ev => {
-    const forMember = ev.child_id ? state.members.find(m=>m.id===ev.child_id) : ev.parent_id ? state.members.find(m=>m.id===ev.parent_id) : null;
-    out += `<div class="row" ${isParent?`onclick="openEditEvent(${ev.id})"`:""}><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${formatDateNice(ev._next)} · ${ev.event_time}${ev.recurrence?" · repeats weekly":""} · ${forMember?`${forMember.emoji} ${esc(forMember.name)}`:"👪 Family"}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
+    const forMembers = (ev.assigned_to || []).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
+    const forLabel = forMembers.length ? forMembers.map(m => `${m.emoji} ${esc(m.name)}`).join(", ") : "👪 Family";
+    out += `<div class="row" ${isParent?`onclick="openEditEvent(${ev.id})"`:""}><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${formatDateNice(ev._next)} · ${ev.event_time}${ev.recurrence?" · repeats weekly":""} · ${forLabel}</span></div>${isParent?`<span style="font-size:14px;color:var(--textMuted);">✏️</span>`:""}</div>`;
   });
   if (isParent) out += `<button class="btn-dashed" onclick="openAddEvent()">+ Add an event</button>`;
   out += `</div>`;
@@ -1072,10 +1075,8 @@ function renderModal() {
       <label class="label">Time</label>
       <input class="input" type="time" id="f-event-time" value="${f.time}">
       <label class="label">Who's this for?</label>
-      <div class="chip-row">
-        <button class="chip ${f.forType==='family'?'active':''}" onclick="state.forms.event.forType='family';state.forms.event.forId=null;render()">👪 Family</button>
-        ${state.members.map(m=>`<button class="chip ${f.forType===m.role && f.forId===m.id?'active':''}" onclick="state.forms.event.forType='${m.role}';state.forms.event.forId=${m.id};render()">${m.emoji} ${esc(m.name)}</button>`).join("")}
-      </div>
+      <div class="chip-row">${state.members.map(m=>`<button class="chip ${f.assignedTo.includes(m.id)?'active':''}" onclick="toggleEventAssign(${m.id})">${m.emoji} ${esc(m.name)}</button>`).join("")}</div>
+      <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">Pick as many people as you like — leave everyone unselected for a whole-family event.</p>
       <label class="label">Repeats</label>
       <div class="chip-row"><button class="chip ${f.recurring?'active':''}" onclick="state.forms.event.recurring=!state.forms.event.recurring;render()">🔁 Weekly</button></div>
       <div class="modal-btns">
@@ -1168,7 +1169,7 @@ Object.assign(window, {
   saveRewardForm, deleteRewardForm, saveMemberForm, deleteMemberForm, addShoppingItem, toggleShoppingItem,
   removeShoppingItem, clearCheckedShopping, openAddChore, openEditChore, openAddReward, openEditReward,
   openDeduct, openAddMember, openEditProfile, closeModal, toggleAssign,
-  openAddEvent, openEditEvent, saveEventForm, deleteEventForm,
+  openAddEvent, openEditEvent, saveEventForm, deleteEventForm, toggleEventAssign,
   openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
   toggleChildcareInclusion, openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
