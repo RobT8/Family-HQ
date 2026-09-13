@@ -239,6 +239,13 @@ function subscribeRealtime() {
 }
 
 function showToast(msg) { state.toast = msg; render(); setTimeout(() => { state.toast = null; renderToastOnly(); }, 2200); }
+// Reads a member's freshest balance/total_earned straight from the DB right before a points
+// write, so two approvals/awards/deducts landing in quick succession don't clobber each other
+// with numbers computed from stale local state.
+async function freshMember(userId, cols = "balance,total_earned") {
+  const { data } = await sb.from("familyhq_members").select(cols).eq("id", userId).single();
+  return data || state.members.find(m => m.id === userId) || { balance: 0, total_earned: 0 };
+}
 function renderToastOnly() { const t = document.getElementById("toast-holder"); if (t) t.innerHTML = state.toast ? `<div class="toast">${state.toast}</div>` : ""; }
 
 // ---------- actions ----------
@@ -254,8 +261,8 @@ async function approveChore(entry) {
   const { error } = await sb.from("familyhq_chore_log").update({ status: "approved" }).eq("id", entry.id);
   if (error) { showToast(`Approve failed: ${error.message}`); console.error("approveChore error:", error); return; }
   if (chore) {
-    const m = state.members.find(m => m.id === entry.user_id);
-    const { error: pointsError } = await sb.from("familyhq_members").update({ balance: (m.balance||0) + chore.points, total_earned: (m.total_earned||0) + chore.points }).eq("id", entry.user_id);
+    const base = await freshMember(entry.user_id);
+    const { error: pointsError } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + chore.points, total_earned: (base.total_earned||0) + chore.points }).eq("id", entry.user_id);
     if (pointsError) { showToast(`Points update failed: ${pointsError.message}`); console.error("approveChore points error:", pointsError); return; }
   }
   showToast(`Approved — +${chore?.points||0} pts ⭐`);
@@ -275,8 +282,8 @@ async function claimReward(reward) {
 }
 async function approveRewardClaim(claim) {
   const reward = state.rewards.find(r => r.id === claim.reward_id);
-  const m = state.members.find(m => m.id === claim.user_id);
-  const { error } = await sb.from("familyhq_members").update({ balance: (m.balance||0) - reward.cost }).eq("id", claim.user_id);
+  const base = await freshMember(claim.user_id, "balance");
+  const { error } = await sb.from("familyhq_members").update({ balance: Math.max(0, (base.balance||0) - reward.cost) }).eq("id", claim.user_id);
   if (error) { showToast(`Failed: ${error.message}`); console.error("approveRewardClaim error:", error); return; }
   const { error: claimError } = await sb.from("familyhq_reward_claims").update({ status: "approved" }).eq("id", claim.id);
   if (claimError) { showToast(`Failed: ${claimError.message}`); console.error("approveRewardClaim claim error:", claimError); return; }
@@ -290,8 +297,8 @@ async function rejectRewardClaim(claim) {
 async function confirmDeduct() {
   const f = state.forms.deduct;
   if (!f.reason.trim()) { showToast("Add a reason first"); return; }
-  const m = state.members.find(m => m.id === f.childId);
-  const newBal = Math.max(0, (m.balance||0) - f.amount);
+  const base = await freshMember(f.childId, "balance");
+  const newBal = Math.max(0, (base.balance||0) - f.amount);
   const { error } = await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
   if (error) { showToast(`Deduct failed: ${error.message}`); console.error("confirmDeduct error:", error); return; }
   showToast(`${f.amount} pts deducted`);
@@ -300,8 +307,8 @@ async function confirmDeduct() {
 async function confirmAward() {
   const f = state.forms.award;
   if (!f.reason.trim()) { showToast("Add a reason first"); return; }
-  const m = state.members.find(m => m.id === f.childId);
-  const { error } = await sb.from("familyhq_members").update({ balance: (m.balance||0) + f.amount, total_earned: (m.total_earned||0) + f.amount }).eq("id", f.childId);
+  const base = await freshMember(f.childId);
+  const { error } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + f.amount, total_earned: (base.total_earned||0) + f.amount }).eq("id", f.childId);
   if (error) { showToast(`Award failed: ${error.message}`); console.error("confirmAward error:", error); return; }
   showToast(`+${f.amount} pts awarded ⭐`);
   state.modal = null; render();
@@ -663,7 +670,9 @@ function renderOverview(kids) {
 }
 
 function renderMyJobs(cu) {
-  const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && !c.is_custom && isChoreDue(c));
+  const statusOrder = { todo: 0, rejected: 0, pending: 1, approved: 2 };
+  const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && !c.is_custom && isChoreDue(c))
+    .sort((a, b) => statusOrder[choreStatus(a.id, cu.id)] - statusOrder[choreStatus(b.id, cu.id)]);
   let out = `<div class="content"><h3 class="section-head">This week's jobs</h3>`;
   if (!myChores.length) out += `<p class="empty-msg">No jobs due right now 🎉</p>`;
   myChores.forEach(ch => {
