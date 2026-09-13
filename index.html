@@ -109,6 +109,7 @@ let state = {
     deduct: { childId: null, amount: 5, reason: "" },
     award: { childId: null, amount: 5, reason: "" },
     custom: { title: "", emoji: "⭐" },
+    reject: { entry: null, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
     event: { title: "", emoji: "⭐", forType: "family", forId: null, date: todayKey(), time: "16:00", recurring: false },
     holiday: { name: "", startDate: todayKey(), endDate: todayKey() },
@@ -267,10 +268,17 @@ async function approveChore(entry) {
   }
   showToast(`Approved — +${chore?.points||0} pts ⭐`);
 }
-async function rejectChore(entry) {
-  const { error } = await sb.from("familyhq_chore_log").update({ status: "rejected" }).eq("id", entry.id);
+async function rejectChore(entry, reason) {
+  const { error } = await sb.from("familyhq_chore_log").update({ status: "rejected", reject_reason: reason || null }).eq("id", entry.id);
   if (error) { showToast(`Failed: ${error.message}`); console.error("rejectChore error:", error); return; }
   showToast("Sent back");
+}
+function openRejectChore(entry) { state.forms.reject = { entry, reason: "" }; state.modal = "rejectChore"; render(); }
+async function confirmRejectChore() {
+  const f = state.forms.reject;
+  if (!f.reason.trim()) { showToast("Add a reason first"); return; }
+  await rejectChore(f.entry, f.reason);
+  state.modal = null; render();
 }
 async function claimReward(reward) {
   const avail = availableBalance(state.currentUser.id);
@@ -671,14 +679,20 @@ function renderOverview(kids) {
 
 function renderMyJobs(cu) {
   const statusOrder = { todo: 0, rejected: 0, pending: 1, approved: 2 };
-  const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && !c.is_custom && isChoreDue(c))
+  const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && isChoreDue(c)
+      && (!c.is_custom || choreStatus(c.id, cu.id) !== "approved"))
     .sort((a, b) => statusOrder[choreStatus(a.id, cu.id)] - statusOrder[choreStatus(b.id, cu.id)]);
   let out = `<div class="content"><h3 class="section-head">This week's jobs</h3>`;
   if (!myChores.length) out += `<p class="empty-msg">No jobs due right now 🎉</p>`;
   myChores.forEach(ch => {
     const status = choreStatus(ch.id, cu.id);
     const meta = ch.recurring === "fortnightly" ? `every 2 weeks · ${ch.day_of_week}` : ch.recurring;
-    out += `<div class="row">${choreIconHtml(ch)}<div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta}</span></div>`;
+    out += `<div class="row">${choreIconHtml(ch)}<div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta}</span>`;
+    if (status === "rejected") {
+      const entry = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === cu.id && l.period === periodFor(ch));
+      if (entry?.reject_reason) out += `<span class="row-meta" style="color:#DC2626;">↩️ ${esc(entry.reject_reason)}</span>`;
+    }
+    out += `</div>`;
     if (status === "todo") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Done ✋</button>`;
     else if (status === "pending") out += `<span style="font-size:12px;color:var(--accent);font-weight:600;">Waiting for approval</span>`;
     else if (status === "approved") out += `<span style="font-size:18px;">✅</span>`;
@@ -750,10 +764,10 @@ function renderApprove(pendingApprovals, pendingClaims) {
       out += `<div class="approval-row" style="flex-direction:column;align-items:stretch;gap:10px;">
         <div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${chore?.emoji||"⭐"}</span><div><span class="row-title">${esc(chore?.title||"Job")}</span><br><span class="row-meta">${esc(who?.name)} · submitted for approval</span></div></div>
         <div><span class="label" style="margin-top:0;">Award how many points?</span><div class="chip-row">${[5,10,15,20,25,30].map(p=>`<button class="chip ${draft===p?'active':''}" onclick="state.customPointsDraft[${entry.id}]=${p};render()">${p}</button>`).join("")}</div></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;"><button class="approve-btn" onclick='approveCustomChore(${JSON.stringify(entry)}, ${draft})'>✅</button><button class="reject-btn" onclick='rejectChore(${JSON.stringify(entry)})'>↩️</button></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;"><button class="approve-btn" onclick='approveCustomChore(${JSON.stringify(entry)}, ${draft})'>✅</button><button class="reject-btn" onclick='openRejectChore(${JSON.stringify(entry)})'>↩️</button></div>
       </div>`;
     } else {
-      out += `<div class="approval-row"><div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${chore?.emoji||"❓"}</span><div><span class="row-title">${esc(chore?.title||"Removed job")}</span><br><span class="row-meta">${esc(who?.name)} · ${chore?.points||0} pts</span></div></div><div style="display:flex;gap:8px;"><button class="approve-btn" onclick='approveChore(${JSON.stringify(entry)})'>✅</button><button class="reject-btn" onclick='rejectChore(${JSON.stringify(entry)})'>↩️</button></div></div>`;
+      out += `<div class="approval-row"><div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${chore?.emoji||"❓"}</span><div><span class="row-title">${esc(chore?.title||"Removed job")}</span><br><span class="row-meta">${esc(who?.name)} · ${chore?.points||0} pts</span></div></div><div style="display:flex;gap:8px;"><button class="approve-btn" onclick='approveChore(${JSON.stringify(entry)})'>✅</button><button class="reject-btn" onclick='openRejectChore(${JSON.stringify(entry)})'>↩️</button></div></div>`;
     }
   });
   out += `<h3 class="section-head" style="margin-top:24px;">🎁 Reward claims</h3>`;
@@ -1001,6 +1015,16 @@ function renderModal() {
       <label class="label">Icon</label>
       <div class="emoji-row">${CHORE_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.custom.emoji='${em}';render()">${em}</button>`).join("")}</div>
       <div class="modal-btns"><div style="flex:1;"></div><button class="cancel-btn" onclick="closeModal()">Cancel</button><button class="save-btn" onclick="submitCustomJob()">Send for approval</button></div>`;
+  } else if (state.modal === "rejectChore") {
+    const f = state.forms.reject;
+    const chore = state.chores.find(c => c.id === f.entry.chore_id);
+    const who = state.members.find(m => m.id === f.entry.user_id);
+    inner = `
+      <h3 class="modal-title">Send back: ${esc(chore?.title||"Job")}</h3>
+      <div class="row" style="cursor:default;margin-bottom:16px;"><span style="font-size:28px;">${who?.emoji||"🧒"}</span><div class="row-info"><span class="row-title">${esc(who?.name)}</span></div></div>
+      <label class="label">Why are you sending this back?</label>
+      <input class="input" id="f-reject-reason" value="${esc(f.reason)}" placeholder="e.g. Bed wasn't actually made">
+      <div class="modal-btns"><div style="flex:1;"></div><button class="cancel-btn" onclick="closeModal()">Cancel</button><button class="save-btn" style="background:#DC2626;" onclick="confirmRejectChore()">Send back</button></div>`;
   } else if (state.modal === "addMember" || state.modal === "editProfile") {
     const f = state.forms.profile;
     inner = `
@@ -1104,6 +1128,7 @@ function wireModalInputs() {
     ["f-reason", (v) => state.forms.deduct.reason = v],
     ["f-award-reason", (v) => state.forms.award.reason = v],
     ["f-custom-title", (v) => state.forms.custom.title = v],
+    ["f-reject-reason", (v) => state.forms.reject.reason = v],
     ["f-name", (v) => state.forms.profile.name = v],
     ["f-pin", (v) => state.forms.profile.pin = v.replace(/\D/g,"")],
     ["f-event-title", (v) => state.forms.event.title = v],
@@ -1132,6 +1157,7 @@ Object.assign(window, {
   openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
   toggleChildcareInclusion, openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
+  openRejectChore, confirmRejectChore,
   state, render
 });
 
