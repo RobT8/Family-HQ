@@ -349,7 +349,7 @@ async function deleteChoreForm(id) {
 async function saveRewardForm() {
   const f = state.forms.reward;
   if (!f.title.trim()) return;
-  const cost = Math.min(1000, Math.max(20, Math.round((f.cost || 20) / 20) * 20));
+  const cost = Math.max(1, parseInt(f.cost, 10) || 0);
   let error;
   if (state.modal === "addReward") { ({ error } = await sb.from("familyhq_rewards").insert({ id: Date.now(), title: f.title, cost, emoji: f.emoji })); if (!error) showToast("Reward added 🎁"); }
   else { ({ error } = await sb.from("familyhq_rewards").update({ title: f.title, cost, emoji: f.emoji }).eq("id", state.editTarget.id)); if (!error) showToast("Reward updated 🎁"); }
@@ -988,13 +988,7 @@ function renderModal() {
       <label class="label">Icon</label>
       <div class="emoji-row">${REWARD_EMOJIS.map(em=>`<button class="emoji-btn ${f.emoji===em?'active':''}" onclick="state.forms.reward.emoji='${em}';render()">${em}</button>`).join("")}</div>
       <label class="label">Cost (points)</label>
-      <div class="chip-row">${[20,60,100,200,500,1000].map(p=>`<button class="chip ${f.cost===p?'active':''}" onclick="state.forms.reward.cost=${p};render()">${p}</button>`).join("")}</div>
-      <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
-        <button class="emoji-btn" style="width:40px;height:40px;font-size:20px;" onclick="state.forms.reward.cost=Math.max(20,(state.forms.reward.cost||0)-20);render()">−</button>
-        <input class="input" type="number" id="f-reward-cost" style="text-align:center;font-weight:700;" min="20" max="1000" step="20" value="${f.cost}">
-        <button class="emoji-btn" style="width:40px;height:40px;font-size:20px;" onclick="state.forms.reward.cost=Math.min(1000,(state.forms.reward.cost||0)+20);render()">+</button>
-      </div>
-      <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">Any multiple of 20, up to 1000.</p>
+      <input class="input" type="number" id="f-reward-cost" min="1" value="${f.cost}" placeholder="e.g. 30">
       <div class="modal-btns">
         ${state.modal==="editReward"?`<button class="delete-btn" onclick="deleteRewardForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
         <div style="flex:1;"></div>
