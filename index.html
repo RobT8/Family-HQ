@@ -112,7 +112,7 @@ let state = {
     reject: { entry: null, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
     event: { title: "", emoji: "⭐", forType: "family", forId: null, date: todayKey(), time: "16:00", recurring: false },
-    holiday: { name: "", startDate: todayKey(), endDate: todayKey() },
+    holiday: { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true },
     care: { holidayId: null, date: null, childId: null, carer: "", activity: "", slot: "all" },
     shoppingInput: ""
   }
@@ -447,19 +447,19 @@ async function deleteEventForm(id) {
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteEventForm error:", error); return; }
   showToast("Event removed"); state.modal = null; await fetchAll();
 }
-function openAddHoliday() { state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey() }; state.modal = "addHoliday"; render(); }
+function openAddHoliday() { state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true }; state.modal = "addHoliday"; render(); }
 function openEditHoliday(id) {
   const h = state.holidays.find(x => x.id === id);
   if (!h) return;
   state.editTarget = h;
-  state.forms.holiday = { name: h.name, startDate: h.start_date, endDate: h.end_date };
+  state.forms.holiday = { name: h.name, startDate: h.start_date, endDate: h.end_date, excludeWeekends: !!h.exclude_weekends };
   state.modal = "editHoliday"; render();
 }
 async function saveHolidayForm() {
   const f = state.forms.holiday;
   if (!f.name.trim() || !f.startDate || !f.endDate) { showToast("Fill in all fields"); return; }
   if (f.endDate < f.startDate) { showToast("End date is before the start date"); return; }
-  const payload = { name: f.name, start_date: f.startDate, end_date: f.endDate };
+  const payload = { name: f.name, start_date: f.startDate, end_date: f.endDate, exclude_weekends: f.excludeWeekends };
   let error;
   if (state.modal === "addHoliday") { ({ error } = await sb.from("familyhq_holidays").insert({ id: Date.now(), ...payload })); if (!error) showToast("Holiday added 🏖️"); }
   else { ({ error } = await sb.from("familyhq_holidays").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Holiday updated 🏖️"); }
@@ -914,7 +914,8 @@ function renderChildcareTab(cu, isParent) {
 }
 
 function renderHolidayDetail(h, cu, isParent) {
-  const dates = datesInRange(h.start_date, h.end_date);
+  let dates = datesInRange(h.start_date, h.end_date);
+  if (h.exclude_weekends) dates = dates.filter(d => { const day = new Date(d + "T00:00:00").getDay(); return day !== 0 && day !== 6; });
   const includedKids = state.members.filter(m => m.role === "child" && m.include_in_childcare !== false);
   let out = `<div class="content">
     <button class="back-link" style="margin:0 0 12px;padding:0;" onclick="backToHolidays()">← All holidays</button>
@@ -1093,6 +1094,8 @@ function renderModal() {
       <input class="input" type="date" id="f-holiday-start" value="${f.startDate}">
       <label class="label">End date</label>
       <input class="input" type="date" id="f-holiday-end" value="${f.endDate}">
+      <label class="label">Weekends</label>
+      <div class="chip-row"><button class="chip ${f.excludeWeekends?'active':''}" onclick="state.forms.holiday.excludeWeekends=!state.forms.holiday.excludeWeekends;render()">🚫 Exclude weekends from the rota</button></div>
       <div class="modal-btns">
         ${state.modal==="editHoliday"?`<button class="delete-btn" onclick="deleteHolidayForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
         <div style="flex:1;"></div>
