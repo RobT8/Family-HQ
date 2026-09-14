@@ -99,14 +99,14 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // ---------- state ----------
 let state = {
   members: [], chores: [], choreLog: [], rewards: [], rewardClaims: [], shopping: [],
-  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {}, deductionPresets: [],
+  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {}, pointPresets: [],
   currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
     chore: { title: "", points: 5, emoji: "⭐", assignedTo: [], recurring: "daily", dayOfWeek: "Sun", startDate: todayKey(), skipWeekends: false, skipHolidays: false },
     reward: { title: "", cost: 20, emoji: "🎁" },
     deduct: { childId: null, amount: 5, reason: "" },
-    preset: { title: "", amount: 5 },
+    preset: { title: "", amount: 5, kind: "deduct" },
     award: { childId: null, amount: 5, reason: "" },
     custom: { title: "", emoji: "⭐" },
     reject: { entry: null, reason: "" },
@@ -243,7 +243,7 @@ function availableBalance(userId) {
 
 // ---------- data layer ----------
 async function fetchAll() {
-  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, deductionPresets] = await Promise.all([
+  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, pointPresets] = await Promise.all([
     sb.from("familyhq_members").select("*").order("id"),
     sb.from("familyhq_chores").select("*").order("id"),
     sb.from("familyhq_chore_log").select("*"),
@@ -264,7 +264,7 @@ async function fetchAll() {
   state.events = events.data || [];
   state.holidays = holidays.data || [];
   state.childcare = childcare.data || [];
-  state.deductionPresets = deductionPresets.data || [];
+  state.pointPresets = pointPresets.data || [];
   state.loaded = true;
   // keep currentUser in sync with fresh data
   if (state.currentUser) {
@@ -370,19 +370,19 @@ async function confirmDeduct() {
   showToast(`${amount} pts deducted`);
   state.modal = null; await fetchAll();
 }
-function applyDeductionPreset(id) {
-  const p = state.deductionPresets.find(x => x.id === id);
+function applyPointPreset(id) {
+  const p = state.pointPresets.find(x => x.id === id);
   if (!p) return;
-  state.forms.deduct.amount = p.amount;
-  state.forms.deduct.reason = p.title;
+  state.forms[p.kind].amount = p.amount;
+  state.forms[p.kind].reason = p.title;
   render();
 }
-function openAddPreset() { state.forms.preset = { title: "", amount: 5 }; state.modal = "addPreset"; render(); }
+function openAddPreset(kind) { state.forms.preset = { title: "", amount: 5, kind }; state.modal = "addPreset"; render(); }
 function openEditPreset(id) {
-  const p = state.deductionPresets.find(x => x.id === id);
+  const p = state.pointPresets.find(x => x.id === id);
   if (!p) return;
   state.editTarget = p;
-  state.forms.preset = { title: p.title, amount: p.amount };
+  state.forms.preset = { title: p.title, amount: p.amount, kind: p.kind };
   state.modal = "editPreset"; render();
 }
 async function savePresetForm() {
@@ -390,8 +390,8 @@ async function savePresetForm() {
   if (!f.title.trim()) { showToast("Add a name for this preset"); return; }
   const amount = Math.max(1, parseInt(f.amount, 10) || 0);
   let error;
-  if (state.modal === "addPreset") { ({ error } = await sb.from("familyhq_deduction_presets").insert({ id: Date.now(), title: f.title, amount })); if (!error) showToast("Preset added"); }
-  else { ({ error } = await sb.from("familyhq_deduction_presets").update({ title: f.title, amount }).eq("id", state.editTarget.id)); if (!error) showToast("Preset updated"); }
+  if (state.modal === "addPreset") { ({ error } = await sb.from("familyhq_deduction_presets").insert({ id: Date.now(), title: f.title, amount, kind: f.kind })); if (!error) showToast("Preset added"); }
+  else { ({ error } = await sb.from("familyhq_deduction_presets").update({ title: f.title, amount, kind: f.kind }).eq("id", state.editTarget.id)); if (!error) showToast("Preset updated"); }
   if (error) { showToast(`Save failed: ${error.message}`); console.error("savePresetForm error:", error); return; }
   state.modal = null; state.editTarget = null; await fetchAll();
 }
@@ -737,7 +737,7 @@ function renderHome() {
   else if (state.tab === "shopping") out += renderShopping();
   else if (state.tab === "approve" && isParent) out += renderApprove(pendingApprovals, pendingClaims);
   else if (state.tab === "rewards") out += renderRewards(isParent, cu);
-  else if (state.tab === "scores") out += renderScores(kids);
+  else if (state.tab === "scores") out += renderScores(kids, isParent);
   else if (state.tab === "events") out += renderEvents(cu, isParent);
   else if (state.tab === "childcare") out += renderChildcareTab(cu, isParent);
   else if (state.tab === "settings" && isParent) out += renderSettings(kids);
@@ -896,7 +896,7 @@ function renderRewards(isParent, cu) {
   return out;
 }
 
-function renderScores(kids) {
+function renderScores(kids, isParent) {
   let out = `<div class="content"><h3 class="section-head">Leaderboard</h3>`;
   [...kids].sort((a,b) => b.total_earned - a.total_earned).forEach((kid, i) => {
     const spentApproved = state.rewardClaims.filter(rc => rc.user_id===kid.id && rc.status==="approved").reduce((s,rc)=> s + (state.rewards.find(r=>r.id===rc.reward_id)?.cost||0), 0);
@@ -912,6 +912,30 @@ function renderScores(kids) {
       ${pendingSpend>0?`<span style="font-size:12px;color:var(--accent);">🕐 −${pendingSpend} pts on hold</span>`:""}
     </div></div></div>`;
   });
+
+  if (isParent) {
+    const awardPresets = state.pointPresets.filter(p => p.kind === "award");
+    const deductPresets = state.pointPresets.filter(p => p.kind === "deduct");
+    out += `<h4 style="font-size:14px;font-weight:700;margin:24px 0 10px;">Points Management</h4>`;
+    kids.forEach(kid => {
+      out += `<div class="row"><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)}</span><span class="row-meta">Balance: ⭐ ${kid.balance} · Total earned: ${kid.total_earned}</span></div><button class="award-btn" onclick="openAward(${kid.id})">+ Add</button><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></div>`;
+    });
+
+    out += `<div class="mgmt-header" style="margin-top:24px;"><h4 style="font-size:14px;font-weight:700;margin:0;">Points Presets</h4><button class="btn-add" onclick="openAddPreset('award')">+ Add</button></div>`;
+    if (!awardPresets.length) out += `<p class="empty-msg">No presets yet — add the ones you award most, like "Helped a neighbour".</p>`;
+    awardPresets.forEach(p => {
+      out += `<div class="row" onclick="openEditPreset(${p.id})"><span style="font-size:20px;">➕</span><div class="row-info"><span class="row-title">${esc(p.title)}</span><span class="row-meta">+${p.amount} pts</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
+    });
+    out += `<button class="btn-dashed" onclick="openAddPreset('award')">+ Add a points preset</button>`;
+
+    out += `<div class="mgmt-header" style="margin-top:24px;"><h4 style="font-size:14px;font-weight:700;margin:0;">Deduction Presets</h4><button class="btn-add" onclick="openAddPreset('deduct')">+ Add</button></div>`;
+    if (!deductPresets.length) out += `<p class="empty-msg">No presets yet — add the ones you use most, like "Left mess in room".</p>`;
+    deductPresets.forEach(p => {
+      out += `<div class="row" onclick="openEditPreset(${p.id})"><span style="font-size:20px;">➖</span><div class="row-info"><span class="row-title">${esc(p.title)}</span><span class="row-meta">${p.amount} pts</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
+    });
+    out += `<button class="btn-dashed" onclick="openAddPreset('deduct')">+ Add a deduction preset</button>`;
+  }
+
   out += `</div>`;
   return out;
 }
@@ -922,17 +946,7 @@ function renderSettings(kids) {
   state.members.forEach(m => {
     out += `<div class="row" onclick="openEditProfile(${m.id})"><span style="font-size:24px;">${m.emoji}</span><div class="row-info"><span class="row-title">${esc(m.name)}</span><span class="row-meta">${m.role==="parent"?"Admin / Parent":"Child"} · PIN: ${m.pin}</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
   });
-  out += `<button class="btn-dashed" onclick="openAddMember()">+ Add family member</button>
-    <h4 style="font-size:14px;font-weight:700;margin:24px 0 10px;">Points Management</h4>`;
-  kids.forEach(kid => {
-    out += `<div class="row"><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)}</span><span class="row-meta">Balance: ⭐ ${kid.balance} · Total earned: ${kid.total_earned}</span></div><button class="award-btn" onclick="openAward(${kid.id})">+ Add</button><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></div>`;
-  });
-  out += `<div class="mgmt-header" style="margin-top:24px;"><h4 style="font-size:14px;font-weight:700;margin:0;">Deduction Presets</h4><button class="btn-add" onclick="openAddPreset()">+ Add</button></div>`;
-  if (!state.deductionPresets.length) out += `<p class="empty-msg">No presets yet — add the ones you use most, like "Left mess in room".</p>`;
-  state.deductionPresets.forEach(p => {
-    out += `<div class="row" onclick="openEditPreset(${p.id})"><span style="font-size:20px;">➖</span><div class="row-info"><span class="row-title">${esc(p.title)}</span><span class="row-meta">${p.amount} pts</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
-  });
-  out += `<button class="btn-dashed" onclick="openAddPreset()">+ Add a deduction preset</button>`;
+  out += `<button class="btn-dashed" onclick="openAddMember()">+ Add family member</button>`;
   out += `</div>`;
   return out;
 }
@@ -1090,12 +1104,13 @@ function renderModal() {
   } else if (state.modal === "deduct") {
     const f = state.forms.deduct;
     const m = state.members.find(x=>x.id===f.childId);
+    const deductPresets = state.pointPresets.filter(p => p.kind === "deduct");
     inner = `
       <h3 class="modal-title">Deduct points</h3>
       <div class="row" style="cursor:default;margin-bottom:16px;"><span style="font-size:28px;">${m?.emoji}</span><div class="row-info"><span class="row-title">${esc(m?.name)}</span><span class="row-meta">Current balance: ⭐ ${m?.balance}</span></div></div>
-      ${state.deductionPresets.length ? `
+      ${deductPresets.length ? `
         <label class="label">Quick pick</label>
-        <div class="chip-row">${state.deductionPresets.map(p=>`<button class="chip" onclick="applyDeductionPreset(${p.id})">${esc(p.title)} (−${p.amount})</button>`).join("")}</div>
+        <div class="chip-row">${deductPresets.map(p=>`<button class="chip" onclick="applyPointPreset(${p.id})">${esc(p.title)} (−${p.amount})</button>`).join("")}</div>
       ` : ""}
       <label class="label">How many points?</label>
       <input class="input" type="number" id="f-deduct-amount" min="1" value="${f.amount}">
@@ -1105,20 +1120,26 @@ function renderModal() {
   } else if (state.modal === "award") {
     const f = state.forms.award;
     const m = state.members.find(x=>x.id===f.childId);
+    const awardPresets = state.pointPresets.filter(p => p.kind === "award");
     inner = `
       <h3 class="modal-title">Add points</h3>
       <div class="row" style="cursor:default;margin-bottom:16px;"><span style="font-size:28px;">${m?.emoji}</span><div class="row-info"><span class="row-title">${esc(m?.name)}</span><span class="row-meta">Current balance: ⭐ ${m?.balance}</span></div></div>
+      ${awardPresets.length ? `
+        <label class="label">Quick pick</label>
+        <div class="chip-row">${awardPresets.map(p=>`<button class="chip" onclick="applyPointPreset(${p.id})">${esc(p.title)} (+${p.amount})</button>`).join("")}</div>
+      ` : ""}
       <label class="label">How many points?</label>
-      <div class="chip-row">${[5,10,15,20,25,30].map(p=>`<button class="chip ${f.amount===p?'active':''}" onclick="state.forms.award.amount=${p};render()">${p}</button>`).join("")}</div>
+      <input class="input" type="number" id="f-award-amount" min="1" value="${f.amount}">
       <label class="label">Reason</label>
       <input class="input" id="f-award-reason" value="${esc(f.reason)}" placeholder="e.g. Helped a neighbour, extra kindness">
       <div class="modal-btns"><div style="flex:1;"></div><button class="cancel-btn" onclick="closeModal()">Cancel</button><button class="save-btn" onclick="confirmAward()">Add ${f.amount} pts</button></div>`;
   } else if (state.modal === "addPreset" || state.modal === "editPreset") {
     const f = state.forms.preset;
+    const isAward = f.kind === "award";
     inner = `
-      <h3 class="modal-title">${state.modal==="addPreset"?"Add a deduction preset":"Edit preset"}</h3>
+      <h3 class="modal-title">${state.modal==="addPreset"?(isAward?"Add a points preset":"Add a deduction preset"):"Edit preset"}</h3>
       <label class="label">What's it for?</label>
-      <input class="input" id="f-preset-title" value="${esc(f.title)}" placeholder="e.g. Left mess in room">
+      <input class="input" id="f-preset-title" value="${esc(f.title)}" placeholder="${isAward?'e.g. Helped a neighbour':'e.g. Left mess in room'}">
       <label class="label">How many points?</label>
       <input class="input" type="number" id="f-preset-amount" min="1" value="${f.amount}">
       <div class="modal-btns">
@@ -1263,6 +1284,7 @@ function wireModalInputs() {
     ["f-preset-title", (v) => state.forms.preset.title = v],
     ["f-preset-amount", (v) => state.forms.preset.amount = parseInt(v, 10) || 0],
     ["f-award-reason", (v) => state.forms.award.reason = v],
+    ["f-award-amount", (v) => state.forms.award.amount = parseInt(v, 10) || 0],
     ["f-custom-title", (v) => state.forms.custom.title = v],
     ["f-reward-cost", (v) => state.forms.reward.cost = parseInt(v, 10) || 0],
     ["f-reject-reason", (v) => state.forms.reject.reason = v],
@@ -1296,7 +1318,7 @@ Object.assign(window, {
   openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
   toggleChildcareInclusion, openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
-  applyDeductionPreset, openAddPreset, openEditPreset, savePresetForm, deletePresetForm,
+  applyPointPreset, openAddPreset, openEditPreset, savePresetForm, deletePresetForm,
   openRejectChore, confirmRejectChore,
   state, render
 });
