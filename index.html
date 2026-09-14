@@ -99,13 +99,14 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // ---------- state ----------
 let state = {
   members: [], chores: [], choreLog: [], rewards: [], rewardClaims: [], shopping: [],
-  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {},
+  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {}, deductionPresets: [],
   currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
     chore: { title: "", points: 5, emoji: "⭐", assignedTo: [], recurring: "daily", dayOfWeek: "Sun", startDate: todayKey(), skipWeekends: false, skipHolidays: false },
     reward: { title: "", cost: 20, emoji: "🎁" },
     deduct: { childId: null, amount: 5, reason: "" },
+    preset: { title: "", amount: 5 },
     award: { childId: null, amount: 5, reason: "" },
     custom: { title: "", emoji: "⭐" },
     reject: { entry: null, reason: "" },
@@ -242,7 +243,7 @@ function availableBalance(userId) {
 
 // ---------- data layer ----------
 async function fetchAll() {
-  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare] = await Promise.all([
+  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, deductionPresets] = await Promise.all([
     sb.from("familyhq_members").select("*").order("id"),
     sb.from("familyhq_chores").select("*").order("id"),
     sb.from("familyhq_chore_log").select("*"),
@@ -251,7 +252,8 @@ async function fetchAll() {
     sb.from("familyhq_shopping_list").select("*").order("created_at"),
     sb.from("familyhq_events").select("*").order("event_date"),
     sb.from("familyhq_holidays").select("*").order("start_date"),
-    sb.from("familyhq_childcare").select("*").order("care_date")
+    sb.from("familyhq_childcare").select("*").order("care_date"),
+    sb.from("familyhq_deduction_presets").select("*").order("id")
   ]);
   state.members = members.data || [];
   state.chores = chores.data || [];
@@ -262,6 +264,7 @@ async function fetchAll() {
   state.events = events.data || [];
   state.holidays = holidays.data || [];
   state.childcare = childcare.data || [];
+  state.deductionPresets = deductionPresets.data || [];
   state.loaded = true;
   // keep currentUser in sync with fresh data
   if (state.currentUser) {
@@ -282,6 +285,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_events" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_holidays" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_childcare" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_deduction_presets" }, fetchAll)
     .subscribe();
 }
 
@@ -358,12 +362,43 @@ async function rejectRewardClaim(claim) {
 async function confirmDeduct() {
   const f = state.forms.deduct;
   if (!f.reason.trim()) { showToast("Add a reason first"); return; }
+  const amount = Math.max(1, parseInt(f.amount, 10) || 0);
   const base = await freshMember(f.childId, "balance");
-  const newBal = Math.max(0, (base.balance||0) - f.amount);
+  const newBal = Math.max(0, (base.balance||0) - amount);
   const { error } = await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
   if (error) { showToast(`Deduct failed: ${error.message}`); console.error("confirmDeduct error:", error); return; }
-  showToast(`${f.amount} pts deducted`);
+  showToast(`${amount} pts deducted`);
   state.modal = null; await fetchAll();
+}
+function applyDeductionPreset(id) {
+  const p = state.deductionPresets.find(x => x.id === id);
+  if (!p) return;
+  state.forms.deduct.amount = p.amount;
+  state.forms.deduct.reason = p.title;
+  render();
+}
+function openAddPreset() { state.forms.preset = { title: "", amount: 5 }; state.modal = "addPreset"; render(); }
+function openEditPreset(id) {
+  const p = state.deductionPresets.find(x => x.id === id);
+  if (!p) return;
+  state.editTarget = p;
+  state.forms.preset = { title: p.title, amount: p.amount };
+  state.modal = "editPreset"; render();
+}
+async function savePresetForm() {
+  const f = state.forms.preset;
+  if (!f.title.trim()) { showToast("Add a name for this preset"); return; }
+  const amount = Math.max(1, parseInt(f.amount, 10) || 0);
+  let error;
+  if (state.modal === "addPreset") { ({ error } = await sb.from("familyhq_deduction_presets").insert({ id: Date.now(), title: f.title, amount })); if (!error) showToast("Preset added"); }
+  else { ({ error } = await sb.from("familyhq_deduction_presets").update({ title: f.title, amount }).eq("id", state.editTarget.id)); if (!error) showToast("Preset updated"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("savePresetForm error:", error); return; }
+  state.modal = null; state.editTarget = null; await fetchAll();
+}
+async function deletePresetForm(id) {
+  const { error } = await sb.from("familyhq_deduction_presets").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deletePresetForm error:", error); return; }
+  showToast("Preset removed"); state.modal = null; await fetchAll();
 }
 async function confirmAward() {
   const f = state.forms.award;
@@ -892,6 +927,12 @@ function renderSettings(kids) {
   kids.forEach(kid => {
     out += `<div class="row"><span style="font-size:20px;">${kid.emoji}</span><div class="row-info"><span class="row-title">${esc(kid.name)}</span><span class="row-meta">Balance: ⭐ ${kid.balance} · Total earned: ${kid.total_earned}</span></div><button class="award-btn" onclick="openAward(${kid.id})">+ Add</button><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></div>`;
   });
+  out += `<div class="mgmt-header" style="margin-top:24px;"><h4 style="font-size:14px;font-weight:700;margin:0;">Deduction Presets</h4><button class="btn-add" onclick="openAddPreset()">+ Add</button></div>`;
+  if (!state.deductionPresets.length) out += `<p class="empty-msg">No presets yet — add the ones you use most, like "Left mess in room".</p>`;
+  state.deductionPresets.forEach(p => {
+    out += `<div class="row" onclick="openEditPreset(${p.id})"><span style="font-size:20px;">➖</span><div class="row-info"><span class="row-title">${esc(p.title)}</span><span class="row-meta">${p.amount} pts</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
+  });
+  out += `<button class="btn-dashed" onclick="openAddPreset()">+ Add a deduction preset</button>`;
   out += `</div>`;
   return out;
 }
@@ -1052,8 +1093,12 @@ function renderModal() {
     inner = `
       <h3 class="modal-title">Deduct points</h3>
       <div class="row" style="cursor:default;margin-bottom:16px;"><span style="font-size:28px;">${m?.emoji}</span><div class="row-info"><span class="row-title">${esc(m?.name)}</span><span class="row-meta">Current balance: ⭐ ${m?.balance}</span></div></div>
+      ${state.deductionPresets.length ? `
+        <label class="label">Quick pick</label>
+        <div class="chip-row">${state.deductionPresets.map(p=>`<button class="chip" onclick="applyDeductionPreset(${p.id})">${esc(p.title)} (−${p.amount})</button>`).join("")}</div>
+      ` : ""}
       <label class="label">How many points?</label>
-      <div class="chip-row">${[5,10,15,20,25,30].map(p=>`<button class="chip ${f.amount===p?'active':''}" onclick="state.forms.deduct.amount=${p};render()">${p}</button>`).join("")}</div>
+      <input class="input" type="number" id="f-deduct-amount" min="1" value="${f.amount}">
       <label class="label">Reason</label>
       <input class="input" id="f-reason" value="${esc(f.reason)}" placeholder="e.g. Didn't tidy up after being asked">
       <div class="modal-btns"><div style="flex:1;"></div><button class="cancel-btn" onclick="closeModal()">Cancel</button><button class="save-btn" style="background:#DC2626;" onclick="confirmDeduct()">Deduct ${f.amount} pts</button></div>`;
@@ -1068,6 +1113,20 @@ function renderModal() {
       <label class="label">Reason</label>
       <input class="input" id="f-award-reason" value="${esc(f.reason)}" placeholder="e.g. Helped a neighbour, extra kindness">
       <div class="modal-btns"><div style="flex:1;"></div><button class="cancel-btn" onclick="closeModal()">Cancel</button><button class="save-btn" onclick="confirmAward()">Add ${f.amount} pts</button></div>`;
+  } else if (state.modal === "addPreset" || state.modal === "editPreset") {
+    const f = state.forms.preset;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addPreset"?"Add a deduction preset":"Edit preset"}</h3>
+      <label class="label">What's it for?</label>
+      <input class="input" id="f-preset-title" value="${esc(f.title)}" placeholder="e.g. Left mess in room">
+      <label class="label">How many points?</label>
+      <input class="input" type="number" id="f-preset-amount" min="1" value="${f.amount}">
+      <div class="modal-btns">
+        ${state.modal==="editPreset"?`<button class="delete-btn" onclick="deletePresetForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="savePresetForm()">Save</button>
+      </div>`;
   } else if (state.modal === "submitCustom") {
     const f = state.forms.custom;
     inner = `
@@ -1200,6 +1259,9 @@ function wireModalInputs() {
     ["f-title", (v) => { if (state.modal==="addChore"||state.modal==="editChore") state.forms.chore.title = v; else state.forms.reward.title = v; }],
     ["f-startdate", (v) => state.forms.chore.startDate = v],
     ["f-reason", (v) => state.forms.deduct.reason = v],
+    ["f-deduct-amount", (v) => state.forms.deduct.amount = parseInt(v, 10) || 0],
+    ["f-preset-title", (v) => state.forms.preset.title = v],
+    ["f-preset-amount", (v) => state.forms.preset.amount = parseInt(v, 10) || 0],
     ["f-award-reason", (v) => state.forms.award.reason = v],
     ["f-custom-title", (v) => state.forms.custom.title = v],
     ["f-reward-cost", (v) => state.forms.reward.cost = parseInt(v, 10) || 0],
@@ -1234,6 +1296,7 @@ Object.assign(window, {
   openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
   toggleChildcareInclusion, openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
+  applyDeductionPreset, openAddPreset, openEditPreset, savePresetForm, deletePresetForm,
   openRejectChore, confirmRejectChore,
   state, render
 });
