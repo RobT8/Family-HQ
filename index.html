@@ -95,6 +95,11 @@
 const SUPABASE_URL = "https://zpesevmnmaifnooqiyrr.supabase.co";
 const SUPABASE_KEY = "sb_publishable_5WdjrD77OFZANghegb_4-w_fR4d582z";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// Stop mobile browsers restoring this tab's old in-memory JS from the back-forward cache
+// (bfcache) on "close and reopen" or swiping back — that would silently keep running whatever
+// version of the app was loaded before the last update instead of fetching the new one.
+// A no-op "unload" listener is the standard trick to disqualify a page from bfcache.
+window.addEventListener("unload", () => {});
 
 // ---------- state ----------
 let state = {
@@ -305,6 +310,7 @@ async function freshMember(userId, cols = "balance,total_earned") {
 async function logPoints(userId, amount, type, reason) {
   const { error } = await sb.from("familyhq_points_log").insert({ id: Date.now() + Math.floor(Math.random()*1000), user_id: userId, amount, type, reason: reason || null });
   if (error) console.error("logPoints error:", error);
+  return error;
 }
 function recentPointsLog(userId, days = 7) {
   const cutoff = Date.now() - days * 86400000;
@@ -382,8 +388,8 @@ async function confirmDeduct() {
   const newBal = Math.max(0, (base.balance||0) - amount);
   const { error } = await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
   if (error) { showToast(`Deduct failed: ${error.message}`); console.error("confirmDeduct error:", error); return; }
-  await logPoints(f.childId, -amount, "deduct", f.reason);
-  showToast(`${amount} pts deducted`);
+  const logError = await logPoints(f.childId, -amount, "deduct", f.reason);
+  showToast(logError ? `${amount} pts deducted, but log failed: ${logError.message}` : `${amount} pts deducted`);
   state.modal = null; await fetchAll();
 }
 function applyPointPreset(id) {
@@ -422,8 +428,8 @@ async function confirmAward() {
   const base = await freshMember(f.childId);
   const { error } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + f.amount, total_earned: (base.total_earned||0) + f.amount }).eq("id", f.childId);
   if (error) { showToast(`Award failed: ${error.message}`); console.error("confirmAward error:", error); return; }
-  await logPoints(f.childId, f.amount, "award", f.reason);
-  showToast(`+${f.amount} pts awarded ⭐`);
+  const logError = await logPoints(f.childId, f.amount, "award", f.reason);
+  showToast(logError ? `+${f.amount} pts awarded, but log failed: ${logError.message}` : `+${f.amount} pts awarded ⭐`);
   state.modal = null; await fetchAll();
 }
 async function saveChoreForm() {
