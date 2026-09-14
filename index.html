@@ -99,7 +99,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // ---------- state ----------
 let state = {
   members: [], chores: [], choreLog: [], rewards: [], rewardClaims: [], shopping: [],
-  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {}, pointPresets: [],
+  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {}, pointPresets: [], pointsLog: [],
   currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
@@ -243,7 +243,7 @@ function availableBalance(userId) {
 
 // ---------- data layer ----------
 async function fetchAll() {
-  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, pointPresets] = await Promise.all([
+  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, pointPresets, pointsLog] = await Promise.all([
     sb.from("familyhq_members").select("*").order("id"),
     sb.from("familyhq_chores").select("*").order("id"),
     sb.from("familyhq_chore_log").select("*"),
@@ -253,7 +253,8 @@ async function fetchAll() {
     sb.from("familyhq_events").select("*").order("event_date"),
     sb.from("familyhq_holidays").select("*").order("start_date"),
     sb.from("familyhq_childcare").select("*").order("care_date"),
-    sb.from("familyhq_deduction_presets").select("*").order("id")
+    sb.from("familyhq_deduction_presets").select("*").order("id"),
+    sb.from("familyhq_points_log").select("*").order("created_at", { ascending: false })
   ]);
   state.members = members.data || [];
   state.chores = chores.data || [];
@@ -265,6 +266,7 @@ async function fetchAll() {
   state.holidays = holidays.data || [];
   state.childcare = childcare.data || [];
   state.pointPresets = pointPresets.data || [];
+  state.pointsLog = pointsLog.data || [];
   state.loaded = true;
   // keep currentUser in sync with fresh data
   if (state.currentUser) {
@@ -286,6 +288,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_holidays" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_childcare" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_deduction_presets" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_points_log" }, fetchAll)
     .subscribe();
 }
 
@@ -296,6 +299,16 @@ function showToast(msg) { state.toast = msg; render(); setTimeout(() => { state.
 async function freshMember(userId, cols = "balance,total_earned") {
   const { data } = await sb.from("familyhq_members").select(cols).eq("id", userId).single();
   return data || state.members.find(m => m.id === userId) || { balance: 0, total_earned: 0 };
+}
+// Records one row of a family member's points history (chore earned, reward spent,
+// manual award, manual deduct) so it can be shown as a last-7-days activity log.
+async function logPoints(userId, amount, type, reason) {
+  const { error } = await sb.from("familyhq_points_log").insert({ id: Date.now() + Math.floor(Math.random()*1000), user_id: userId, amount, type, reason: reason || null });
+  if (error) console.error("logPoints error:", error);
+}
+function recentPointsLog(userId, days = 7) {
+  const cutoff = Date.now() - days * 86400000;
+  return state.pointsLog.filter(l => l.user_id === userId && new Date(l.created_at).getTime() >= cutoff);
 }
 function renderToastOnly() { const t = document.getElementById("toast-holder"); if (t) t.innerHTML = state.toast ? `<div class="toast">${state.toast}</div>` : ""; }
 
@@ -316,6 +329,7 @@ async function approveChore(entry) {
     const base = await freshMember(entry.user_id);
     const { error: pointsError } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + chore.points, total_earned: (base.total_earned||0) + chore.points }).eq("id", entry.user_id);
     if (pointsError) { showToast(`Points update failed: ${pointsError.message}`); console.error("approveChore points error:", pointsError); return; }
+    if (chore.points) await logPoints(entry.user_id, chore.points, "chore", chore.title);
   }
   await fetchAll();
   showToast(`Approved — +${chore?.points||0} pts ⭐`);
@@ -350,6 +364,7 @@ async function approveRewardClaim(claim) {
   if (error) { showToast(`Failed: ${error.message}`); console.error("approveRewardClaim error:", error); return; }
   const { error: claimError } = await sb.from("familyhq_reward_claims").update({ status: "approved" }).eq("id", claim.id);
   if (claimError) { showToast(`Failed: ${claimError.message}`); console.error("approveRewardClaim claim error:", claimError); return; }
+  if (reward?.cost) await logPoints(claim.user_id, -reward.cost, "reward", reward.title);
   await fetchAll();
   showToast(`✅ Confirmed`);
 }
@@ -367,6 +382,7 @@ async function confirmDeduct() {
   const newBal = Math.max(0, (base.balance||0) - amount);
   const { error } = await sb.from("familyhq_members").update({ balance: newBal }).eq("id", f.childId);
   if (error) { showToast(`Deduct failed: ${error.message}`); console.error("confirmDeduct error:", error); return; }
+  await logPoints(f.childId, -amount, "deduct", f.reason);
   showToast(`${amount} pts deducted`);
   state.modal = null; await fetchAll();
 }
@@ -406,6 +422,7 @@ async function confirmAward() {
   const base = await freshMember(f.childId);
   const { error } = await sb.from("familyhq_members").update({ balance: (base.balance||0) + f.amount, total_earned: (base.total_earned||0) + f.amount }).eq("id", f.childId);
   if (error) { showToast(`Award failed: ${error.message}`); console.error("confirmAward error:", error); return; }
+  await logPoints(f.childId, f.amount, "award", f.reason);
   showToast(`+${f.amount} pts awarded ⭐`);
   state.modal = null; await fetchAll();
 }
@@ -896,6 +913,22 @@ function renderRewards(isParent, cu) {
   return out;
 }
 
+function logDateLabel(iso) {
+  const d = new Date(iso);
+  const key = d.toISOString().slice(0,10);
+  if (key === todayKey()) return "Today";
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+  if (key === yesterday.toISOString().slice(0,10)) return "Yesterday";
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+function pointsLogRowsHtml(entries) {
+  if (!entries.length) return `<p class="empty-msg">No points activity in the last 7 days</p>`;
+  const icons = { chore: "⭐", award: "➕", reward: "🎁", deduct: "➖" };
+  return entries.map(l => {
+    const positive = l.amount > 0;
+    return `<div class="row" style="cursor:default;"><span style="font-size:18px;">${icons[l.type]||"⭐"}</span><div class="row-info"><span class="row-title">${esc(l.reason || (l.type==="chore"?"Job approved":l.type==="reward"?"Reward claimed":""))}</span><span class="row-meta">${logDateLabel(l.created_at)}</span></div><span style="font-size:14px;font-weight:700;color:${positive?"var(--success)":"#DC2626"};">${positive?"+":""}${l.amount}</span></div>`;
+  }).join("");
+}
 function renderScores(kids, isParent) {
   let out = `<div class="content"><h3 class="section-head">Leaderboard</h3>`;
   [...kids].sort((a,b) => b.total_earned - a.total_earned).forEach((kid, i) => {
@@ -934,6 +967,12 @@ function renderScores(kids, isParent) {
       out += `<div class="row" onclick="openEditPreset(${p.id})"><span style="font-size:20px;">➖</span><div class="row-info"><span class="row-title">${esc(p.title)}</span><span class="row-meta">${p.amount} pts</span></div><span style="font-size:12px;color:var(--textMuted);">✏️</span></div>`;
     });
     out += `<button class="btn-dashed" onclick="openAddPreset('deduct')">+ Add a deduction preset</button>`;
+
+    out += `<h4 style="font-size:14px;font-weight:700;margin:24px 0 10px;">📜 Points Log (Last 7 Days)</h4>`;
+    kids.forEach(kid => {
+      out += `<p style="font-size:13px;font-weight:700;color:var(--textMuted);margin:14px 0 6px;">${kid.emoji} ${esc(kid.name)}</p>`;
+      out += pointsLogRowsHtml(recentPointsLog(kid.id));
+    });
   }
 
   out += `</div>`;
@@ -967,6 +1006,8 @@ function renderProfile(cu) {
     ${held>0?`<p style="font-size:12px;color:var(--accent);margin-top:10px;">🕐 ⭐ ${held} pts on hold for claims awaiting approval</p>`:""}
   </div>
   <button class="chip" style="width:100%;text-align:center;margin-top:12px;" onclick="openEditProfile(${cu.id})">✏️ Edit my name &amp; emoji</button>
+  <h4 style="font-size:14px;font-weight:700;margin:24px 0 10px;">📜 Points Log (Last 7 Days)</h4>
+  ${pointsLogRowsHtml(recentPointsLog(cu.id))}
   </div>`;
   return out;
 }
