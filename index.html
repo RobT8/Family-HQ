@@ -561,19 +561,28 @@ async function deleteEventForm(id) {
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteEventForm error:", error); return; }
   showToast("Event removed"); state.modal = null; await fetchAll();
 }
-function openAddHoliday() { state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true }; state.modal = "addHoliday"; render(); }
+function openAddHoliday() {
+  const allKids = state.members.filter(m => m.role === "child").map(m => m.id);
+  state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true, includedChildren: allKids };
+  state.modal = "addHoliday"; render();
+}
 function openEditHoliday(id) {
   const h = state.holidays.find(x => x.id === id);
   if (!h) return;
   state.editTarget = h;
-  state.forms.holiday = { name: h.name, startDate: h.start_date, endDate: h.end_date, excludeWeekends: !!h.exclude_weekends };
+  state.forms.holiday = { name: h.name, startDate: h.start_date, endDate: h.end_date, excludeWeekends: !!h.exclude_weekends, includedChildren: h.included_children || [] };
   state.modal = "editHoliday"; render();
+}
+function toggleHolidayChild(id) {
+  const f = state.forms.holiday;
+  f.includedChildren = f.includedChildren.includes(id) ? f.includedChildren.filter(x=>x!==id) : [...f.includedChildren, id];
+  render();
 }
 async function saveHolidayForm() {
   const f = state.forms.holiday;
   if (!f.name.trim() || !f.startDate || !f.endDate) { showToast("Fill in all fields"); return; }
   if (f.endDate < f.startDate) { showToast("End date is before the start date"); return; }
-  const payload = { name: f.name, start_date: f.startDate, end_date: f.endDate, exclude_weekends: f.excludeWeekends };
+  const payload = { name: f.name, start_date: f.startDate, end_date: f.endDate, exclude_weekends: f.excludeWeekends, included_children: f.includedChildren };
   let error;
   if (state.modal === "addHoliday") { ({ error } = await sb.from("familyhq_holidays").insert({ id: Date.now(), ...payload })); if (!error) showToast("Holiday added 🏖️"); }
   else { ({ error } = await sb.from("familyhq_holidays").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Holiday updated 🏖️"); }
@@ -587,15 +596,6 @@ async function deleteHolidayForm(id) {
   showToast("Holiday removed"); state.modal = null; state.selectedHoliday = null; await fetchAll();
 }
 function openAddCare(holidayId, date, childId = null) { state.forms.care = { holidayId, date, childId, carer: "", activity: "", slot: "all" }; state.modal = "addCare"; render(); }
-async function toggleChildcareInclusion(id) {
-  const m = state.members.find(x => x.id === id);
-  if (!m) return;
-  const newVal = !(m.include_in_childcare !== false);
-  const { error } = await sb.from("familyhq_members").update({ include_in_childcare: newVal }).eq("id", id);
-  if (error) { showToast(`Failed: ${error.message}`); console.error("toggleChildcareInclusion error:", error); return; }
-  m.include_in_childcare = newVal;
-  render();
-}
 function openEditCare(id) {
   const c = state.childcare.find(x => x.id === id);
   if (!c) return;
@@ -1046,19 +1046,16 @@ function renderChildcareTab(cu, isParent) {
     state.selectedHoliday = null;
   }
   const today = todayKey();
+  const allKids = state.members.filter(m => m.role === "child");
   let out = `<div class="content">`;
-  if (isParent) {
-    const kids = state.members.filter(m => m.role === "child");
-    out += `<h3 class="section-head">Included Children</h3>
-      <div class="chip-row" style="margin-bottom:20px;">${kids.map(k=>`<button class="chip ${k.include_in_childcare!==false?'active':''}" onclick="toggleChildcareInclusion(${k.id})">${k.emoji} ${esc(k.name)}</button>`).join("")}</div>
-      <p style="font-size:12px;color:var(--textMuted);margin-top:-14px;margin-bottom:20px;">Only ticked children show up in the holiday rota below.</p>`;
-  }
   out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">🏖️ School Holidays</h3>${isParent?`<button class="btn-add" onclick="openAddHoliday()">+ Add</button>`:""}</div>`;
   const holidays = [...state.holidays].sort((a,b) => a.start_date.localeCompare(b.start_date));
   if (!holidays.length) out += `<p class="empty-msg">No holidays added yet</p>`;
   holidays.forEach(h => {
     const isNow = today >= h.start_date && today <= h.end_date;
-    out += `<div class="row" onclick="selectHoliday(${h.id})"><span class="row-emoji">🏖️</span><div class="row-info"><span class="row-title">${esc(h.name)}${isNow?` <span style="color:var(--success);font-size:12px;font-weight:700;">● Now</span>`:""}</span><span class="row-meta">${formatDateNice(h.start_date)} – ${formatDateNice(h.end_date)}</span></div><span style="font-size:14px;color:var(--textMuted);">›</span></div>`;
+    const included = allKids.filter(k => (h.included_children||[]).includes(k.id));
+    const whoLabel = included.length === allKids.length ? "Everyone" : included.length ? included.map(k=>k.emoji).join(" ") : "No one";
+    out += `<div class="row" onclick="selectHoliday(${h.id})"><span class="row-emoji">🏖️</span><div class="row-info"><span class="row-title">${esc(h.name)}${isNow?` <span style="color:var(--success);font-size:12px;font-weight:700;">● Now</span>`:""}</span><span class="row-meta">${formatDateNice(h.start_date)} – ${formatDateNice(h.end_date)} · ${whoLabel}</span></div><span style="font-size:14px;color:var(--textMuted);">›</span></div>`;
   });
   if (isParent) out += `<button class="btn-dashed" onclick="openAddHoliday()">+ Add a holiday</button>`;
   out += `</div>`;
@@ -1068,7 +1065,7 @@ function renderChildcareTab(cu, isParent) {
 function renderHolidayDetail(h, cu, isParent) {
   let dates = datesInRange(h.start_date, h.end_date);
   if (h.exclude_weekends) dates = dates.filter(d => { const day = new Date(d + "T00:00:00").getDay(); return day !== 0 && day !== 6; });
-  const includedKids = state.members.filter(m => m.role === "child" && m.include_in_childcare !== false);
+  const includedKids = state.members.filter(m => m.role === "child" && (h.included_children||[]).includes(m.id));
   let out = `<div class="content">
     <button class="back-link" style="margin:0 0 12px;padding:0;" onclick="backToHolidays()">← All holidays</button>
     <div class="mgmt-header"><h3 class="section-head" style="margin:0;">🏖️ ${esc(h.name)}</h3>${isParent?`<button class="btn-add" onclick="openEditHoliday(${h.id})">✏️ Edit</button>`:""}</div>
@@ -1283,6 +1280,9 @@ function renderModal() {
       <input class="input" type="date" id="f-holiday-end" value="${f.endDate}">
       <label class="label">Weekends</label>
       <div class="chip-row"><button class="chip ${f.excludeWeekends?'active':''}" onclick="state.forms.holiday.excludeWeekends=!state.forms.holiday.excludeWeekends;render()">🚫 Exclude weekends from the rota</button></div>
+      <label class="label">Which children are included?</label>
+      <div class="chip-row">${state.members.filter(m=>m.role==="child").map(k=>`<button class="chip ${f.includedChildren.includes(k.id)?'active':''}" onclick="toggleHolidayChild(${k.id})">${k.emoji} ${esc(k.name)}</button>`).join("")}</div>
+      <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">Only ticked children show up in this holiday's rota.</p>
       <div class="modal-btns">
         ${state.modal==="editHoliday"?`<button class="delete-btn" onclick="deleteHolidayForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
         <div style="flex:1;"></div>
@@ -1362,9 +1362,9 @@ Object.assign(window, {
   removeShoppingItem, clearCheckedShopping, openAddChore, openEditChore, openAddReward, openEditReward,
   openDeduct, openAddMember, openEditProfile, closeModal, toggleAssign,
   openAddEvent, openEditEvent, saveEventForm, deleteEventForm, toggleEventAssign,
-  openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm,
+  openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm, toggleHolidayChild,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
-  toggleChildcareInclusion, openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
+  openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
   applyPointPreset, openAddPreset, openEditPreset, savePresetForm, deletePresetForm,
   openRejectChore, confirmRejectChore,
   state, render
