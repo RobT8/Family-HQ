@@ -66,7 +66,8 @@
   .approve-btn, .reject-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); font-size: 18px; }
   .approve-btn { background: var(--successLight); }
   .reject-btn { background: #FEF2F2; }
-  .shopping-check { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--border); background: transparent; font-size: 13px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--success); }
+  .shopping-check { width: 28px; height: 28px; border-radius: 7px; border: 2px solid var(--border); background: #fff; font-size: 16px; font-weight: 700; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: transparent; cursor: pointer; }
+  .shopping-check.done { background: var(--success); border-color: var(--success); color: #fff; }
   .shopping-remove { width: 26px; height: 26px; border-radius: 8px; border: none; background: transparent; font-size: 13px; color: var(--textMuted); }
   .overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; justify-content: center; z-index: 100; }
   .modal { background: var(--card); border-radius: 18px 18px 0 0; padding: 24px 20px 32px; width: 100%; max-width: 480px; max-height: 85vh; overflow-y: auto; }
@@ -905,14 +906,14 @@ function renderShopping() {
   if (!state.shopping.length) out += `<p class="empty-msg">Nothing on the list yet — add what you need for the next shop 🛒</p>`;
   undone.forEach(item => {
     const by = state.members.find(m => m.id === item.added_by);
-    out += `<div class="row"><button class="shopping-check" title="Mark as bought" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">○</button><span class="row-title" style="flex:1;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
+    out += `<div class="row"><button class="shopping-check" title="Mark as bought" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})"></button><span class="row-title" style="flex:1;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
   });
   if (done.length) {
     out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin-top:20px;margin-bottom:8px;">Bought (kept for 7 days)</h4>`;
     done.forEach(item => {
       const by = state.members.find(m => m.id === item.added_by);
       const boughtLabel = item.bought_at ? logDateLabel(item.bought_at) : "";
-      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check" title="Undo" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">✓</button><div class="row-info"><span class="row-title" style="text-decoration:line-through;">${esc(item.text)}</span>${boughtLabel?`<span class="row-meta">Bought ${boughtLabel}</span>`:""}</div><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
+      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check done" title="Undo" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">✓</button><div class="row-info"><span class="row-title" style="text-decoration:line-through;">${esc(item.text)}</span>${boughtLabel?`<span class="row-meta">Bought ${boughtLabel}</span>`:""}</div><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
     });
     out += `<button class="chip" style="width:100%;text-align:center;margin-top:10px;" onclick="clearCheckedShopping()">Clear checked items</button>`;
   }
@@ -1090,14 +1091,14 @@ function renderReminders(cu, isParent) {
   pending.forEach(r => {
     const forMembers = (r.assigned_to||[]).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
     const forLabel = forMembers.length ? forMembers.map(m => `${m.emoji} ${esc(m.name)}`).join(", ") : "👪 Family";
-    out += `<div class="row"><button class="shopping-check" title="Mark as done" onclick="toggleReminderDone(${r.id})">○</button><div class="row-info"><span class="row-title">${esc(r.title)}</span><span class="row-meta">${r.due_date?`${formatDateNice(r.due_date)} · `:""}${forLabel}</span></div>${isParent?`<button class="shopping-remove" title="Edit" onclick="openEditReminder(${r.id})">✏️</button><button class="shopping-remove" title="Delete" onclick="deleteReminderForm(${r.id})">✕</button>`:""}</div>`;
+    out += `<div class="row"><button class="shopping-check" title="Mark as done" onclick="toggleReminderDone(${r.id})"></button><div class="row-info"><span class="row-title">${esc(r.title)}</span><span class="row-meta">${r.due_date?`${formatDateNice(r.due_date)} · `:""}${forLabel}</span></div>${isParent?`<button class="shopping-remove" title="Edit" onclick="openEditReminder(${r.id})">✏️</button><button class="shopping-remove" title="Delete" onclick="deleteReminderForm(${r.id})">✕</button>`:""}</div>`;
   });
   if (done.length) {
     out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin-top:20px;margin-bottom:8px;">Done</h4>`;
     done.forEach(r => {
       const forMembers = (r.assigned_to||[]).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
       const forLabel = forMembers.length ? forMembers.map(m => m.emoji).join(" ") : "👪";
-      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check" title="Undo" onclick="toggleReminderDone(${r.id})">✓</button><div class="row-info"><span class="row-title" style="text-decoration:line-through;">${esc(r.title)}</span><span class="row-meta">${forLabel}</span></div>${isParent?`<button class="shopping-remove" title="Delete" onclick="deleteReminderForm(${r.id})">✕</button>`:""}</div>`;
+      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check done" title="Undo" onclick="toggleReminderDone(${r.id})">✓</button><div class="row-info"><span class="row-title" style="text-decoration:line-through;">${esc(r.title)}</span><span class="row-meta">${forLabel}</span></div>${isParent?`<button class="shopping-remove" title="Delete" onclick="deleteReminderForm(${r.id})">✕</button>`:""}</div>`;
     });
   }
   if (isParent) out += `<button class="btn-dashed" onclick="openAddReminder()">+ Add a reminder</button>`;
