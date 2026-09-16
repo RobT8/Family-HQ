@@ -333,6 +333,17 @@ async function markDone(choreId) {
   await fetchAll();
   showToast("Nice one! Waiting for approval ✋");
 }
+// Lets whoever submitted a job (or is logged in as them) take back a submission that's still
+// pending — e.g. tapped the wrong job, or several got submitted by mistake — without needing a
+// parent to formally reject it first.
+async function unsubmitChore(choreId) {
+  const entry = state.choreLog.find(l => l.chore_id === choreId && l.user_id === state.currentUser.id && l.status === "pending");
+  if (!entry) return;
+  const { error } = await sb.from("familyhq_chore_log").delete().eq("id", entry.id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("unsubmitChore error:", error); return; }
+  showToast("Unsubmitted — back to your jobs list");
+  await fetchAll();
+}
 async function approveChore(entry) {
   const chore = state.chores.find(c => c.id === entry.chore_id);
   const { error } = await sb.from("familyhq_chore_log").update({ status: "approved" }).eq("id", entry.id);
@@ -863,7 +874,7 @@ function renderMyJobs(cu) {
     }
     out += `</div>`;
     if (status === "todo") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Done ✋</button>`;
-    else if (status === "pending") out += `<span style="font-size:12px;color:var(--accent);font-weight:600;">Waiting for approval</span>`;
+    else if (status === "pending") out += `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;"><span style="font-size:12px;color:var(--accent);font-weight:600;">Waiting for approval</span><button class="btn-sm" style="background:var(--border);color:var(--text);" onclick="unsubmitChore(${ch.id})">↩️ Unsubmit</button></div>`;
     else if (status === "approved") out += `<span style="font-size:18px;">✅</span>`;
     else if (status === "rejected") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Redo ↩️</button>`;
     out += `</div>`;
@@ -1463,7 +1474,7 @@ function wireModalInputs() {
 
 // expose functions used by inline onclick handlers
 Object.assign(window, {
-  handleProfileTap, handlePinSubmit, handleLogout, markDone, approveChore, rejectChore,
+  handleProfileTap, handlePinSubmit, handleLogout, markDone, unsubmitChore, approveChore, rejectChore,
   claimReward, approveRewardClaim, rejectRewardClaim, confirmDeduct, saveChoreForm, deleteChoreForm,
   saveRewardForm, deleteRewardForm, saveMemberForm, deleteMemberForm, addShoppingItem, toggleShoppingItem,
   removeShoppingItem, clearCheckedShopping, openAddChore, openEditChore, openAddReward, openEditReward,
