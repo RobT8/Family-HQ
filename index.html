@@ -267,6 +267,7 @@ async function fetchAll() {
   state.rewards = rewards.data || [];
   state.rewardClaims = rewardClaims.data || [];
   state.shopping = shopping.data || [];
+  purgeOldBoughtItems(state.shopping);
   state.events = events.data || [];
   state.holidays = holidays.data || [];
   state.childcare = childcare.data || [];
@@ -498,14 +499,30 @@ async function addShoppingItem() {
   state.forms.shoppingInput = ""; await fetchAll();
 }
 async function toggleShoppingItem(item) {
-  const { error } = await sb.from("familyhq_shopping_list").update({ done: !item.done }).eq("id", item.id);
+  const nowDone = !item.done;
+  const { error } = await sb.from("familyhq_shopping_list").update({ done: nowDone, bought_at: nowDone ? new Date().toISOString() : null }).eq("id", item.id);
   if (error) { showToast(`Failed: ${error.message}`); console.error("toggleShoppingItem error:", error); return; }
+  if (nowDone) showToast("Got it — kept here for 7 days");
   await fetchAll();
 }
 async function removeShoppingItem(id) {
   const { error } = await sb.from("familyhq_shopping_list").delete().eq("id", id);
   if (error) { showToast(`Failed: ${error.message}`); console.error("removeShoppingItem error:", error); return; }
   await fetchAll();
+}
+// Bought items stick around struck-through for 7 days so the family can see what was picked up
+// recently, then quietly disappear on their own — this runs on every fetchAll() and removes
+// expired ones from the in-memory list right away, plus fires off a background delete so they
+// don't come back on the next sync.
+function purgeOldBoughtItems(shopping) {
+  const cutoff = Date.now() - 7 * 86400000;
+  const expired = shopping.filter(i => i.done && i.bought_at && new Date(i.bought_at).getTime() < cutoff);
+  if (!expired.length) return;
+  const expiredIds = expired.map(i => i.id);
+  for (let i = shopping.length - 1; i >= 0; i--) if (expiredIds.includes(shopping[i].id)) shopping.splice(i, 1);
+  sb.from("familyhq_shopping_list").delete().in("id", expiredIds).then(({ error }) => {
+    if (error) console.error("purgeOldBoughtItems error:", error);
+  });
 }
 async function clearCheckedShopping() {
   const ids = state.shopping.filter(i => i.done).map(i => i.id);
@@ -848,13 +865,14 @@ function renderShopping() {
   if (!state.shopping.length) out += `<p class="empty-msg">Nothing on the list yet — add what you need for the next shop 🛒</p>`;
   undone.forEach(item => {
     const by = state.members.find(m => m.id === item.added_by);
-    out += `<div class="row"><button class="shopping-check" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">○</button><span class="row-title" style="flex:1;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
+    out += `<div class="row"><button class="shopping-check" title="Mark as bought" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">○</button><span class="row-title" style="flex:1;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
   });
   if (done.length) {
-    out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin-top:20px;margin-bottom:8px;">Got it ✓</h4>`;
+    out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin-top:20px;margin-bottom:8px;">Bought (kept for 7 days)</h4>`;
     done.forEach(item => {
       const by = state.members.find(m => m.id === item.added_by);
-      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">✓</button><span class="row-title" style="flex:1;text-decoration:line-through;">${esc(item.text)}</span><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
+      const boughtLabel = item.bought_at ? logDateLabel(item.bought_at) : "";
+      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check" title="Undo" onclick="toggleShoppingItem(${JSON.stringify(item).replace(/"/g,'&quot;')})">✓</button><div class="row-info"><span class="row-title" style="text-decoration:line-through;">${esc(item.text)}</span>${boughtLabel?`<span class="row-meta">Bought ${boughtLabel}</span>`:""}</div><span>${by?.emoji||""}</span><button class="shopping-remove" onclick="removeShoppingItem(${item.id})">✕</button></div>`;
     });
     out += `<button class="chip" style="width:100%;text-align:center;margin-top:10px;" onclick="clearCheckedShopping()">Clear checked items</button>`;
   }
