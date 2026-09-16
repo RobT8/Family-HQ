@@ -104,7 +104,7 @@ window.addEventListener("unload", () => {});
 // ---------- state ----------
 let state = {
   members: [], chores: [], choreLog: [], rewards: [], rewardClaims: [], shopping: [],
-  events: [], holidays: [], childcare: [], selectedHoliday: null, customPointsDraft: {}, pointPresets: [], pointsLog: [],
+  events: [], holidays: [], childcare: [], reminders: [], selectedHoliday: null, customPointsDraft: {}, pointPresets: [], pointsLog: [],
   currentUser: null, screen: "login", tab: "myjobs", pinTarget: null, pinInput: "",
   modal: null, editTarget: null, toast: null, loaded: false,
   forms: {
@@ -117,6 +117,7 @@ let state = {
     reject: { entry: null, reason: "" },
     profile: { name: "", emoji: "🙂", pin: "", role: "child" },
     event: { title: "", emoji: "⭐", assignedTo: [], date: todayKey(), time: "16:00", endTime: "", repeatType: "none", until: "" },
+    reminder: { title: "", assignedTo: [], dueDate: "" },
     holiday: { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true },
     care: { holidayId: null, date: null, childId: null, carer: "", activity: "", slot: "all" },
     shoppingInput: ""
@@ -248,7 +249,7 @@ function availableBalance(userId) {
 
 // ---------- data layer ----------
 async function fetchAll() {
-  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, pointPresets, pointsLog] = await Promise.all([
+  const [members, chores, choreLog, rewards, rewardClaims, shopping, events, holidays, childcare, pointPresets, pointsLog, reminders] = await Promise.all([
     sb.from("familyhq_members").select("*").order("id"),
     sb.from("familyhq_chores").select("*").order("id"),
     sb.from("familyhq_chore_log").select("*"),
@@ -259,7 +260,8 @@ async function fetchAll() {
     sb.from("familyhq_holidays").select("*").order("start_date"),
     sb.from("familyhq_childcare").select("*").order("care_date"),
     sb.from("familyhq_deduction_presets").select("*").order("id"),
-    sb.from("familyhq_points_log").select("*").order("created_at", { ascending: false })
+    sb.from("familyhq_points_log").select("*").order("created_at", { ascending: false }),
+    sb.from("familyhq_reminders").select("*").order("created_at", { ascending: false })
   ]);
   state.members = members.data || [];
   state.chores = chores.data || [];
@@ -273,6 +275,7 @@ async function fetchAll() {
   state.childcare = childcare.data || [];
   state.pointPresets = pointPresets.data || [];
   state.pointsLog = pointsLog.data || [];
+  state.reminders = reminders.data || [];
   state.loaded = true;
   // keep currentUser in sync with fresh data
   if (state.currentUser) {
@@ -295,6 +298,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_childcare" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_deduction_presets" }, fetchAll)
     .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_points_log" }, fetchAll)
+    .on("postgres_changes", { event: "*", schema: "public", table: "familyhq_reminders" }, fetchAll)
     .subscribe();
 }
 
@@ -578,6 +582,41 @@ async function deleteEventForm(id) {
   if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteEventForm error:", error); return; }
   showToast("Event removed"); state.modal = null; await fetchAll();
 }
+function openAddReminder() { state.forms.reminder = { title: "", assignedTo: [], dueDate: "" }; state.modal = "addReminder"; render(); }
+function openEditReminder(id) {
+  const r = state.reminders.find(x => x.id === id);
+  if (!r) return;
+  state.editTarget = r;
+  state.forms.reminder = { title: r.title, assignedTo: r.assigned_to ? [...r.assigned_to].map(Number) : [], dueDate: r.due_date || "" };
+  state.modal = "editReminder"; render();
+}
+function toggleReminderAssign(id) {
+  const f = state.forms.reminder;
+  f.assignedTo = f.assignedTo.includes(id) ? f.assignedTo.filter(x => x !== id) : [...f.assignedTo, id];
+  render();
+}
+async function saveReminderForm() {
+  const f = state.forms.reminder;
+  if (!f.title.trim()) { showToast("Add what to remember"); return; }
+  const payload = { title: f.title, assigned_to: f.assignedTo, due_date: f.dueDate || null };
+  let error;
+  if (state.modal === "addReminder") { ({ error } = await sb.from("familyhq_reminders").insert({ id: Date.now(), created_by: state.currentUser.id, done: false, ...payload })); if (!error) showToast("Reminder added 🔔"); }
+  else { ({ error } = await sb.from("familyhq_reminders").update(payload).eq("id", state.editTarget.id)); if (!error) showToast("Reminder updated 🔔"); }
+  if (error) { showToast(`Save failed: ${error.message}`); console.error("saveReminderForm error:", error); return; }
+  state.modal = null; state.editTarget = null; await fetchAll();
+}
+async function deleteReminderForm(id) {
+  const { error } = await sb.from("familyhq_reminders").delete().eq("id", id);
+  if (error) { showToast(`Delete failed: ${error.message}`); console.error("deleteReminderForm error:", error); return; }
+  showToast("Reminder removed"); state.modal = null; await fetchAll();
+}
+async function toggleReminderDone(id) {
+  const r = state.reminders.find(x => x.id === id);
+  if (!r) return;
+  const { error } = await sb.from("familyhq_reminders").update({ done: !r.done }).eq("id", id);
+  if (error) { showToast(`Failed: ${error.message}`); console.error("toggleReminderDone error:", error); return; }
+  await fetchAll();
+}
 function openAddHoliday() {
   const allKids = state.members.filter(m => m.role === "child").map(m => m.id);
   state.forms.holiday = { name: "", startDate: todayKey(), endDate: todayKey(), excludeWeekends: true, includedChildren: allKids };
@@ -752,11 +791,11 @@ function renderHome() {
   const approveCount = pendingApprovals.length + pendingClaims.length;
 
   const tabs = isParent ? [
-    ["myjobs","Overview"], ["chores","Jobs"], ["events","Events"], ["childcare","Childcare"], ["shopping","Shopping"],
+    ["myjobs","Overview"], ["chores","Jobs"], ["reminders","Reminders"], ["events","Events"], ["childcare","Childcare"], ["shopping","Shopping"],
     ["approve", approveCount ? `Approve (${approveCount})` : "Approve"],
     ["scores","Scores"], ["rewards","Rewards"], ["settings","Settings"]
   ] : [
-    ["myjobs","My Jobs"], ["events","Events"], ["childcare","Childcare"], ["shopping","Shopping"], ["scores","Scores"], ["rewards","Rewards"], ["profile","My Profile"]
+    ["myjobs","My Jobs"], ["reminders","Reminders"], ["events","Events"], ["childcare","Childcare"], ["shopping","Shopping"], ["scores","Scores"], ["rewards","Rewards"], ["profile","My Profile"]
   ];
 
   let out = `
@@ -774,6 +813,7 @@ function renderHome() {
 
   if (state.tab === "myjobs") out += isParent ? renderOverview(kids) : renderMyJobs(cu);
   else if (state.tab === "chores" && isParent) out += renderChoresTab(cu);
+  else if (state.tab === "reminders") out += renderReminders(cu, isParent);
   else if (state.tab === "shopping") out += renderShopping();
   else if (state.tab === "approve" && isParent) out += renderApprove(pendingApprovals, pendingClaims);
   else if (state.tab === "rewards") out += renderRewards(isParent, cu);
@@ -1036,6 +1076,35 @@ function renderProfile(cu) {
   return out;
 }
 
+function renderReminders(cu, isParent) {
+  // Parents see every reminder; a kid only sees ones addressed to them specifically or, when
+  // nobody in particular was picked, whole-family ones (same "leave everyone unselected for
+  // everyone" convention events already use).
+  const visible = isParent ? state.reminders : state.reminders.filter(r => !(r.assigned_to||[]).length || r.assigned_to.map(Number).includes(cu.id));
+  const pending = [...visible].filter(r => !r.done).sort((a,b) => (a.due_date||"9999-99-99").localeCompare(b.due_date||"9999-99-99"));
+  const done = visible.filter(r => r.done);
+
+  let out = `<div class="content">`;
+  out += `<div class="mgmt-header"><h3 class="section-head" style="margin:0;">🔔 Reminders</h3>${isParent?`<button class="btn-add" onclick="openAddReminder()">+ Add</button>`:""}</div>`;
+  if (!visible.length) out += `<p class="empty-msg">No reminders yet</p>`;
+  pending.forEach(r => {
+    const forMembers = (r.assigned_to||[]).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
+    const forLabel = forMembers.length ? forMembers.map(m => `${m.emoji} ${esc(m.name)}`).join(", ") : "👪 Family";
+    out += `<div class="row"><button class="shopping-check" title="Mark as done" onclick="toggleReminderDone(${r.id})">○</button><div class="row-info"><span class="row-title">${esc(r.title)}</span><span class="row-meta">${r.due_date?`${formatDateNice(r.due_date)} · `:""}${forLabel}</span></div>${isParent?`<button class="shopping-remove" title="Edit" onclick="openEditReminder(${r.id})">✏️</button><button class="shopping-remove" title="Delete" onclick="deleteReminderForm(${r.id})">✕</button>`:""}</div>`;
+  });
+  if (done.length) {
+    out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin-top:20px;margin-bottom:8px;">Done</h4>`;
+    done.forEach(r => {
+      const forMembers = (r.assigned_to||[]).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
+      const forLabel = forMembers.length ? forMembers.map(m => m.emoji).join(" ") : "👪";
+      out += `<div class="row" style="opacity:0.5;"><button class="shopping-check" title="Undo" onclick="toggleReminderDone(${r.id})">✓</button><div class="row-info"><span class="row-title" style="text-decoration:line-through;">${esc(r.title)}</span><span class="row-meta">${forLabel}</span></div>${isParent?`<button class="shopping-remove" title="Delete" onclick="deleteReminderForm(${r.id})">✕</button>`:""}</div>`;
+    });
+  }
+  if (isParent) out += `<button class="btn-dashed" onclick="openAddReminder()">+ Add a reminder</button>`;
+  out += `</div>`;
+  return out;
+}
+
 function renderEvents(cu, isParent) {
   const events = state.events
     .map(ev => ({ ...ev, _next: nextOccurrence(ev) }))
@@ -1286,6 +1355,23 @@ function renderModal() {
         <button class="cancel-btn" onclick="closeModal()">Cancel</button>
         <button class="save-btn" onclick="saveEventForm()">Save</button>
       </div>`;
+  } else if (state.modal === "addReminder" || state.modal === "editReminder") {
+    const f = state.forms.reminder;
+    inner = `
+      <h3 class="modal-title">${state.modal==="addReminder"?"Add a reminder":"Edit reminder"}</h3>
+      <label class="label">What's the reminder?</label>
+      <input class="input" id="f-reminder-title" value="${esc(f.title)}" placeholder="e.g. Sign the school trip form">
+      <label class="label">Due date (optional)</label>
+      <input class="input" type="date" id="f-reminder-due" value="${f.dueDate}">
+      <label class="label">Allocate to</label>
+      <div class="chip-row">${state.members.map(m=>`<button class="chip ${f.assignedTo.includes(m.id)?'active':''}" onclick="toggleReminderAssign(${m.id})">${m.emoji} ${esc(m.name)}</button>`).join("")}</div>
+      <p style="font-size:12px;color:var(--textMuted);margin-top:6px;">Pick as many people as you like — leave everyone unselected for a whole-family reminder.</p>
+      <div class="modal-btns">
+        ${state.modal==="editReminder"?`<button class="delete-btn" onclick="deleteReminderForm(${state.editTarget.id})">🗑️ Delete</button>`:""}
+        <div style="flex:1;"></div>
+        <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+        <button class="save-btn" onclick="saveReminderForm()">Save</button>
+      </div>`;
   } else if (state.modal === "addHoliday" || state.modal === "editHoliday") {
     const f = state.forms.holiday;
     inner = `
@@ -1360,6 +1446,8 @@ function wireModalInputs() {
     ["f-event-time", (v) => state.forms.event.time = v],
     ["f-event-endtime", (v) => state.forms.event.endTime = v],
     ["f-event-until", (v) => state.forms.event.until = v],
+    ["f-reminder-title", (v) => state.forms.reminder.title = v],
+    ["f-reminder-due", (v) => state.forms.reminder.dueDate = v],
     ["f-holiday-name", (v) => state.forms.holiday.name = v],
     ["f-holiday-start", (v) => state.forms.holiday.startDate = v],
     ["f-holiday-end", (v) => state.forms.holiday.endDate = v],
@@ -1380,6 +1468,7 @@ Object.assign(window, {
   removeShoppingItem, clearCheckedShopping, openAddChore, openEditChore, openAddReward, openEditReward,
   openDeduct, openAddMember, openEditProfile, closeModal, toggleAssign,
   openAddEvent, openEditEvent, saveEventForm, deleteEventForm, toggleEventAssign,
+  openAddReminder, openEditReminder, toggleReminderAssign, saveReminderForm, deleteReminderForm, toggleReminderDone,
   openAddHoliday, openEditHoliday, saveHolidayForm, deleteHolidayForm, toggleHolidayChild,
   openAddCare, openEditCare, saveCareForm, deleteCareForm, selectHoliday, backToHolidays,
   openAward, confirmAward, openSubmitCustomJob, submitCustomJob, approveCustomChore,
