@@ -131,6 +131,8 @@ const EVENT_EMOJIS = ["⭐","🎂","🏥","🦷","⚽","🎵","🎨","✂️","�
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
 function todayKey() { return new Date().toISOString().slice(0,10); }
+function yesterdayKey() { const d = new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
+function dateKeyPlus(n) { const d = new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 function weekKey(dateObj) {
   const d = new Date(dateObj); const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff); return d.toISOString().slice(0,10);
@@ -233,9 +235,9 @@ function periodFor(chore) {
 function choreStatus(choreId, userId) {
   const chore = state.chores.find(c => c.id === choreId);
   if (!chore) return "todo";
-  const pending = state.choreLog.find(l => l.chore_id === choreId && l.user_id === userId && l.status === "pending");
-  if (pending) return "pending";
   const period = periodFor(chore);
+  // Scoped to the chore's current period so a "missed yesterday" catch-up submission (its own,
+  // separate period) can sit pending approval without blocking today's own Done button.
   const entry = state.choreLog.find(l => l.chore_id === choreId && l.user_id === userId && l.period === period);
   return entry ? entry.status : "todo";
 }
@@ -325,13 +327,15 @@ function recentPointsLog(userId, days = 7) {
 function renderToastOnly() { const t = document.getElementById("toast-holder"); if (t) t.innerHTML = state.toast ? `<div class="toast">${state.toast}</div>` : ""; }
 
 // ---------- actions ----------
-async function markDone(choreId) {
+// periodOverride lets a daily job be caught up for yesterday (see the "Missed yesterday?" link
+// in My Jobs) instead of always submitting for today.
+async function markDone(choreId, periodOverride) {
   const chore = state.chores.find(c => c.id === choreId);
-  const period = periodFor(chore);
+  const period = periodOverride || periodFor(chore);
   const { error } = await sb.from("familyhq_chore_log").insert({ id: Date.now(), chore_id: choreId, user_id: state.currentUser.id, period, status: "pending" });
   if (error) { showToast(`Couldn't mark done: ${error.message}`); console.error("markDone error:", error); return; }
   await fetchAll();
-  showToast("Nice one! Waiting for approval ✋");
+  showToast(periodOverride ? "Submitted for yesterday ✋" : "Nice one! Waiting for approval ✋");
 }
 // Lets whoever submitted a job (or is logged in as them) take back a submission that's still
 // pending — e.g. tapped the wrong job, or several got submitted by mistake — without needing a
@@ -840,27 +844,85 @@ function renderHome() {
 }
 
 function renderOverview(kids) {
+  const days = [0, 1, 2].map(dateKeyPlus); // today, tomorrow, day after
   let out = `<div class="content">`;
-  kids.forEach(kid => {
-    const kidChores = state.chores.filter(c => c.assigned_to.includes(kid.id) && !c.is_custom && isChoreDue(c));
-    out += `<h3 class="section-head">${kid.emoji} ${esc(kid.name)}<span style="font-size:13px;font-weight:600;color:var(--accent);margin-left:auto;">⭐ ${kid.balance} pts</span><button class="award-btn" onclick="openAward(${kid.id})">+ Add</button><button class="deduct-btn" onclick="openDeduct(${kid.id})">− Deduct</button></h3>`;
-    kidChores.forEach(ch => {
-      const status = choreStatus(ch.id, kid.id);
-      const icon = status==="approved"?"✅":status==="pending"?"🕐":"—";
-      const meta = ch.recurring === "fortnightly" ? `every 2 weeks · ${ch.day_of_week}` : ch.recurring;
-      out += `<div class="row">${choreIconHtml(ch)}<div class="row-info"><span class="row-title">${esc(ch.title)}</span><span class="row-meta">${ch.points} pts · ${meta}</span></div><span style="font-size:18px;opacity:${status!=='todo'?1:0.3}">${icon}</span></div>`;
+
+  // ---- Coming up: events + reminders due in the next few days, grouped by day ----
+  out += `<h3 class="section-head">📋 Next Few Days</h3>`;
+  const upcomingEvents = state.events
+    .map(ev => ({ ...ev, _next: nextOccurrence(ev) }))
+    .filter(ev => ev._next && days.includes(ev._next));
+  const upcomingReminders = state.reminders.filter(r => !r.done && r.due_date && days.includes(r.due_date));
+
+  let anyUpcoming = false;
+  days.forEach((day, i) => {
+    const dayEvents = upcomingEvents.filter(e => e._next === day).sort((a,b) => a.event_time.localeCompare(b.event_time));
+    const dayReminders = upcomingReminders.filter(r => r.due_date === day);
+    if (!dayEvents.length && !dayReminders.length) return;
+    anyUpcoming = true;
+    const label = i===0 ? "Today" : i===1 ? "Tomorrow" : formatDateNice(day);
+    out += `<h4 style="font-size:13px;font-weight:700;color:var(--textMuted);margin:16px 0 8px;">${label}</h4>`;
+    dayEvents.forEach(ev => {
+      const forMembers = (ev.assigned_to||[]).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
+      const forLabel = forMembers.length ? forMembers.map(m => m.emoji).join(" ") : "👪";
+      const timeLabel = ev.end_time ? `${ev.event_time}–${ev.end_time}` : ev.event_time;
+      out += `<div class="row" style="cursor:default;"><span class="row-emoji">${ev.emoji}</span><div class="row-info"><span class="row-title">${esc(ev.title)}</span><span class="row-meta">${timeLabel} · ${forLabel}</span></div></div>`;
+    });
+    dayReminders.forEach(r => {
+      const forMembers = (r.assigned_to||[]).map(id => state.members.find(m => m.id === Number(id))).filter(Boolean);
+      const forLabel = forMembers.length ? forMembers.map(m => m.emoji).join(" ") : "👪";
+      out += `<div class="row" style="cursor:default;"><span style="font-size:20px;">🔔</span><div class="row-info"><span class="row-title">${esc(r.title)}</span><span class="row-meta">${forLabel}</span></div></div>`;
     });
   });
+  if (!anyUpcoming) out += `<p class="empty-msg">Nothing on the calendar for the next few days 🎉</p>`;
+
+  // ---- Outstanding jobs: a quick per-person status, parents included ----
+  out += `<h3 class="section-head" style="margin-top:24px;">✋ Outstanding Jobs</h3>`;
+  const everyone = [...state.members.filter(m => m.role === "parent"), ...kids];
+  let anyOutstanding = false;
+  everyone.forEach(person => {
+    const personChores = state.chores.filter(c => c.assigned_to.includes(person.id) && !c.is_custom && isChoreDue(c));
+    const outstanding = personChores.filter(c => ["todo","rejected"].includes(choreStatus(c.id, person.id)));
+    const waiting = personChores.filter(c => choreStatus(c.id, person.id) === "pending");
+    if (!outstanding.length && !waiting.length) return;
+    anyOutstanding = true;
+    const parts = [];
+    if (outstanding.length) parts.push(`${outstanding.length} to do`);
+    if (waiting.length) parts.push(`${waiting.length} waiting for approval`);
+    out += `<div class="row" style="cursor:default;"><span style="font-size:20px;">${person.emoji}</span><div class="row-info"><span class="row-title">${esc(person.name)}</span><span class="row-meta">${parts.join(" · ")}</span></div></div>`;
+  });
+  if (!anyOutstanding) out += `<p class="empty-msg">Everyone's all caught up ✅</p>`;
+
   out += `</div>`;
   return out;
 }
 
+// A daily job counts as "missed yesterday" if it was due yesterday and the kid never logged
+// anything against it (any status) for yesterday's period — lets them catch it up today, but
+// only for exactly one day back; the day after that, it's simply gone.
+function missedYesterday(chore, userId) {
+  if (chore.recurring !== "daily") return false;
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  if (!isChoreDue(chore, y)) return false;
+  const yKey = yesterdayKey();
+  return !state.choreLog.some(l => l.chore_id === chore.id && l.user_id === userId && l.period === yKey);
+}
+// Nudges a kid who hasn't logged anything at all today, once it's gotten late enough in the day
+// that they've plausibly had the chance to.
+function needsDailyReminder(cu) {
+  if (new Date().getHours() < 17) return false;
+  const dailyChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && isChoreDue(c) && c.recurring === "daily");
+  if (!dailyChores.length) return false;
+  const today = todayKey();
+  return !state.choreLog.some(l => l.user_id === cu.id && l.period === today);
+}
 function renderMyJobs(cu) {
   const statusOrder = { todo: 0, rejected: 0, pending: 1, approved: 2 };
   const myChores = state.chores.filter(c => c.assigned_to.includes(cu.id) && isChoreDue(c)
       && (!c.is_custom || choreStatus(c.id, cu.id) !== "approved"))
     .sort((a, b) => statusOrder[choreStatus(a.id, cu.id)] - statusOrder[choreStatus(b.id, cu.id)]);
   let out = `<div class="content">`;
+  if (needsDailyReminder(cu)) out += `<div style="background:var(--accentLight);border-radius:var(--radius);padding:12px 14px;margin-bottom:16px;font-size:13px;font-weight:600;color:var(--text);">🔔 You haven't marked any jobs done today yet — don't forget!</div>`;
   out += `<button class="btn-dashed" style="margin-top:0;" onclick="openSubmitCustomJob()">+ Submit something you did</button>`;
   out += `<h3 class="section-head" style="margin-top:20px;">This week's jobs</h3>`;
   if (!myChores.length) out += `<p class="empty-msg">No jobs due right now 🎉</p>`;
@@ -872,6 +934,7 @@ function renderMyJobs(cu) {
       const entry = state.choreLog.find(l => l.chore_id === ch.id && l.user_id === cu.id && l.period === periodFor(ch));
       if (entry?.reject_reason) out += `<span class="row-meta" style="color:#DC2626;">↩️ ${esc(entry.reject_reason)}</span>`;
     }
+    if (missedYesterday(ch, cu.id)) out += `<button style="background:none;border:none;padding:0;margin-top:2px;font-size:12px;font-weight:600;color:var(--accent);text-decoration:underline;text-align:left;cursor:pointer;" onclick="markDone(${ch.id}, '${yesterdayKey()}')">Missed yesterday? Tap to submit it</button>`;
     out += `</div>`;
     if (status === "todo") out += `<button class="btn-sm" onclick="markDone(${ch.id})">Done ✋</button>`;
     else if (status === "pending") out += `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;"><span style="font-size:12px;color:var(--accent);font-weight:600;">Waiting for approval</span><button class="btn-sm" style="background:var(--border);color:var(--text);" onclick="unsubmitChore(${ch.id})">↩️ Unsubmit</button></div>`;
@@ -947,7 +1010,8 @@ function renderApprove(pendingApprovals, pendingClaims) {
         <div style="display:flex;gap:8px;justify-content:flex-end;"><button class="approve-btn" onclick='approveCustomChore(${JSON.stringify(entry)}, ${draft})'>✅</button><button class="reject-btn" onclick='openRejectChore(${JSON.stringify(entry)})'>↩️</button></div>
       </div>`;
     } else {
-      out += `<div class="approval-row"><div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${chore?.emoji||"❓"}</span><div><span class="row-title">${esc(chore?.title||"Removed job")}</span><br><span class="row-meta">${esc(who?.name)} · ${chore?.points||0} pts</span></div></div><div style="display:flex;gap:8px;"><button class="approve-btn" onclick='approveChore(${JSON.stringify(entry)})'>✅</button><button class="reject-btn" onclick='openRejectChore(${JSON.stringify(entry)})'>↩️</button></div></div>`;
+      const lateNote = entry.period && entry.period !== todayKey() && entry.period !== weekKey(new Date()) ? ` · for ${formatDateNice(entry.period)}` : "";
+      out += `<div class="approval-row"><div style="display:flex;align-items:center;gap:10px;"><span class="row-emoji">${chore?.emoji||"❓"}</span><div><span class="row-title">${esc(chore?.title||"Removed job")}</span><br><span class="row-meta">${esc(who?.name)} · ${chore?.points||0} pts${lateNote}</span></div></div><div style="display:flex;gap:8px;"><button class="approve-btn" onclick='approveChore(${JSON.stringify(entry)})'>✅</button><button class="reject-btn" onclick='openRejectChore(${JSON.stringify(entry)})'>↩️</button></div></div>`;
     }
   });
   out += `<h3 class="section-head" style="margin-top:24px;">🎁 Reward claims</h3>`;
